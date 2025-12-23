@@ -2659,25 +2659,33 @@ function highlightFKRelation(tableName, columnName) {
     const table = schema[tableName];
     const column = table?.columns?.find(c => c.name === columnName);
     
-    if (!column || !column.fk || !column.fk_ref) return;
+    if (!column || !column.fk || !column.fk_ref) {
+        console.log('No FK found for', tableName, columnName);
+        return;
+    }
     
     const [refTable, refCol] = column.fk_ref;
+    console.log('FK:', tableName + '.' + columnName, '→', refTable + '.' + refCol);
     
     // Find all FK arrows from this table.column to referenced table
-    const allPaths = document.querySelectorAll('.fk-line');
-    allPaths.forEach(path => {
-        const invisiblePath = path.previousElementSibling;
-        if (invisiblePath && 
-            invisiblePath.dataset.fromTable === tableName && 
+    // Check BOTH invisible path and visible path for dataset
+    const allInvisiblePaths = document.querySelectorAll('path[data-from-table]');
+    allInvisiblePaths.forEach(invisiblePath => {
+        if (invisiblePath.dataset.fromTable === tableName && 
             invisiblePath.dataset.fromCol === columnName) {
-            path.classList.add('hovered');
-            persistentHighlights.arrows.push(path);
+            // Found matching arrow - highlight the visible path (next sibling)
+            const visiblePath = invisiblePath.nextElementSibling;
+            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+                visiblePath.classList.add('hovered');
+                persistentHighlights.arrows.push(visiblePath);
+                console.log('Highlighted arrow from', tableName, 'to', invisiblePath.dataset.toTable);
+            }
         }
     });
     
     // Highlight the connected tables
-    const fromNode = document.querySelector(`[onclick*="'${tableName}'"]`)?.closest('.node');
-    const toNode = document.querySelector(`[onclick*="'${refTable}'"]`)?.closest('.node');
+    const fromNode = document.querySelector(`[data-table="${tableName}"]`);
+    const toNode = document.querySelector(`[data-table="${refTable}"]`);
     
     if (fromNode) {
         fromNode.classList.add('fk-connected');
@@ -2695,28 +2703,34 @@ function highlightFKRelation(tableName, columnName) {
 function highlightPKRelations(tableName, columnName) {
     clearPersistentHighlights();
     
+    console.log('PK Relations for', tableName + '.' + columnName);
+    
     // Find all FK arrows that reference this PK
-    const allPaths = document.querySelectorAll('.fk-line');
-    allPaths.forEach(path => {
-        const invisiblePath = path.previousElementSibling;
-        if (invisiblePath && 
-            invisiblePath.dataset.toTable === tableName && 
+    // Use the invisible path dataset to find matches
+    const allInvisiblePaths = document.querySelectorAll('path[data-to-table]');
+    allInvisiblePaths.forEach(invisiblePath => {
+        if (invisiblePath.dataset.toTable === tableName && 
             invisiblePath.dataset.toCol === columnName) {
-            path.classList.add('hovered');
-            persistentHighlights.arrows.push(path);
-            
-            // Also highlight the source table
-            const fromTable = invisiblePath.dataset.fromTable;
-            const fromNode = document.querySelector(`[onclick*="'${fromTable}'"]`)?.closest('.node');
-            if (fromNode && !persistentHighlights.tables.includes(fromNode)) {
-                fromNode.classList.add('fk-connected');
-                persistentHighlights.tables.push(fromNode);
+            // Found an arrow pointing to this PK - highlight the visible path (next sibling)
+            const visiblePath = invisiblePath.nextElementSibling;
+            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+                visiblePath.classList.add('hovered');
+                persistentHighlights.arrows.push(visiblePath);
+                console.log('Highlighted arrow from', invisiblePath.dataset.fromTable, 'to', tableName);
+                
+                // Also highlight the source table
+                const fromTable = invisiblePath.dataset.fromTable;
+                const fromNode = document.querySelector(`[data-table="${fromTable}"]`);
+                if (fromNode && !persistentHighlights.tables.includes(fromNode)) {
+                    fromNode.classList.add('fk-connected');
+                    persistentHighlights.tables.push(fromNode);
+                }
             }
         }
     });
     
     // Highlight the PK table itself
-    const pkNode = document.querySelector(`[onclick*="'${tableName}'"]`)?.closest('.node');
+    const pkNode = document.querySelector(`[data-table="${tableName}"]`);
     if (pkNode && !persistentHighlights.tables.includes(pkNode)) {
         pkNode.classList.add('fk-connected');
         persistentHighlights.tables.push(pkNode);
