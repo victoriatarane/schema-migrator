@@ -1,0 +1,53 @@
+name: 📋 Schema Question
+description: Ask a question about a specific table or column migration
+title: "[SCHEMA] "
+labels: ["schema-question", "needs-review"]
+body:
+  - type: dropdown
+    id: schema_type
+    attributes:
+      label: Schema Type
+      description: Which schema is this about?
+      options:
+        - Old Schema (Legacy)
+        - New Tenant Schema
+        - Central Schema
+    validations:
+      required: true
+  
+  - type: input
+    id: table_name
+    attributes:
+      label: Table Name
+      description: Which table is this question about?
+      placeholder: "e.g., users, orders, products"
+    validations:
+      required: true
+  
+  - type: input
+    id: column_name
+    attributes:
+      label: Column Name (optional)
+      description: Specific column if applicable
+      placeholder: "e.g., email, created_at"
+    validations:
+      required: false
+  
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What would you like to know?
+      placeholder: "e.g., Why is this field deprecated? Should we migrate this to tenant or central DB?"
+    validations:
+      required: true
+  
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any additional information that might be helpful
+      placeholder: "e.g., This field is used in Report X, affects Y users, etc."
+    validations:
+      required: false
+

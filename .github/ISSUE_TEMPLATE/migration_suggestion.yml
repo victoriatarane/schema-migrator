@@ -1,0 +1,78 @@
+name: 💡 Migration Suggestion
+description: Suggest a change to how a field should be migrated
+title: "[SUGGESTION] "
+labels: ["migration-suggestion", "needs-review"]
+body:
+  - type: input
+    id: old_table
+    attributes:
+      label: Old Schema Table
+      description: Table name in the legacy schema
+      placeholder: "e.g., accounts"
+    validations:
+      required: true
+  
+  - type: input
+    id: old_column
+    attributes:
+      label: Old Schema Column
+      description: Column name in the legacy schema
+      placeholder: "e.g., email_address"
+    validations:
+      required: true
+  
+  - type: dropdown
+    id: current_status
+    attributes:
+      label: Current Status
+      description: How is this field currently handled?
+      options:
+        - Migrated to Tenant DB
+        - Migrated to Central DB
+        - Migrated to Both
+        - Deprecated
+        - Not Yet Mapped
+    validations:
+      required: true
+  
+  - type: dropdown
+    id: suggested_target
+    attributes:
+      label: Suggested Target
+      description: Where should this field be migrated?
+      options:
+        - Tenant DB Only
+        - Central DB Only
+        - Both Databases
+        - Should be Deprecated
+    validations:
+      required: true
+  
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Rationale
+      description: Why should we make this change?
+      placeholder: "e.g., This field contains PII and should not be in the central DB for compliance reasons"
+    validations:
+      required: true
+  
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact Assessment
+      description: What would be affected by this change?
+      placeholder: "e.g., Would break Report X, would require updating API endpoint Y"
+    validations:
+      required: false
+  
+  - type: textarea
+    id: sql_suggestion
+    attributes:
+      label: Suggested SQL (optional)
+      description: If you have a specific migration query in mind
+      placeholder: "SELECT email FROM accounts WHERE active = 1"
+      render: sql
+    validations:
+      required: false
+
