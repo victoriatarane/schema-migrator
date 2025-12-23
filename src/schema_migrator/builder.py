@@ -256,7 +256,7 @@ def merge_mappings(old_tables, mappings, deprecated_tables):
     return old_tables
 
 
-def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations):
+def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations, github_repo=None):
     """Generate the complete HTML file."""
     
     all_data = {
@@ -1618,15 +1618,36 @@ renderGraph();
     return html
 
 
-def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(script_dir)
+def build_diagram(old_schema=None, tenant_schema=None, central_schema=None, 
+                  mappings=None, output=None, github_repo=None):
+    """
+    Build an interactive schema migration diagram
     
-    # Read schema files
-    old_path = os.path.join(repo_root, 'schemas', 'old', 'schema.sql')
-    new_path = os.path.join(repo_root, 'schemas', 'new', 'tenant_schema.sql')
-    central_path = os.path.join(repo_root, 'schemas', 'new', 'central_schema.sql')
-    mappings_path = os.path.join(repo_root, 'scripts', 'field_mappings.json')
+    Args:
+        old_schema (str): Path to old schema SQL file
+        tenant_schema (str): Path to new tenant schema SQL file  
+        central_schema (str): Path to central schema SQL file
+        mappings (str): Path to field mappings JSON file
+        output (str): Path for output HTML file
+        github_repo (str, optional): GitHub repo for issues (format: owner/repo)
+    
+    Returns:
+        str: Path to generated HTML file
+    """
+    # Default paths (for backward compatibility)
+    if old_schema is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(os.path.dirname(script_dir))
+        old_schema = os.path.join(repo_root, 'schemas', 'old', 'schema.sql')
+        tenant_schema = os.path.join(repo_root, 'schemas', 'new', 'tenant_schema.sql')
+        central_schema = os.path.join(repo_root, 'schemas', 'new', 'central_schema.sql')
+        mappings = os.path.join(repo_root, 'scripts', 'field_mappings.json')
+        output = os.path.join(repo_root, 'tools', 'schema_diagram.html')
+    
+    old_path = old_schema
+    new_path = tenant_schema
+    central_path = central_schema
+    mappings_path = mappings
     
     print("Parsing SQL schema files...")
     
@@ -1663,13 +1684,25 @@ def main():
     print(f"  Deprecated fields: {deprecated}")
     
     # Generate HTML
-    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk)
+    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk, github_repo)
     
-    output_path = os.path.join(repo_root, 'tools', 'schema_diagram.html')
-    with open(output_path, 'w') as f:
+    # Use provided output path or default
+    if output is None:
+        output = os.path.join(repo_root, 'tools', 'schema_diagram.html')
+    
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    
+    with open(output, 'w') as f:
         f.write(html)
     
-    print(f"\n✅ Generated: {output_path}")
+    print(f"\n✅ Generated: {output}")
+    return output
+
+
+def main():
+    """Legacy main function for backward compatibility"""
+    build_diagram()
 
 
 if __name__ == '__main__':
