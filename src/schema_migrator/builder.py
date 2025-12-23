@@ -1527,20 +1527,37 @@ function highlightFKRelation(tableName, columnName) {
     console.log('FK:', tableName + '.' + columnName, '→', refTable + '.' + refCol);
     
     // Find all FK arrows from this table.column to referenced table
-    // Check BOTH invisible path and visible path for dataset
-    const allInvisiblePaths = document.querySelectorAll('path[data-from-table]');
+    // Look for ALL invisible paths and filter
+    const allInvisiblePaths = document.querySelectorAll('path[stroke="transparent"]');
+    let foundCount = 0;
+    
     allInvisiblePaths.forEach(invisiblePath => {
-        if (invisiblePath.dataset.fromTable === tableName && 
-            invisiblePath.dataset.fromCol === columnName) {
-            // Found matching arrow - highlight the visible path (next sibling)
-            const visiblePath = invisiblePath.nextElementSibling;
-            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+        const fromTable = invisiblePath.getAttribute('data-from-table');
+        const fromCol = invisiblePath.getAttribute('data-from-col');
+        
+        if (fromTable === tableName && fromCol === columnName) {
+            foundCount++;
+            console.log('Found FK arrow:', tableName, '→', invisiblePath.getAttribute('data-to-table'));
+            
+            // Find the visible path (next element sibling)
+            let visiblePath = invisiblePath.nextElementSibling;
+            
+            // Skip text nodes and find the actual path element
+            while (visiblePath && visiblePath.nodeType !== 1) {
+                visiblePath = visiblePath.nextSibling;
+            }
+            
+            if (visiblePath && visiblePath.tagName === 'path' && visiblePath.classList.contains('fk-line')) {
                 visiblePath.classList.add('hovered');
                 persistentHighlights.arrows.push(visiblePath);
-                console.log('Highlighted arrow from', tableName, 'to', invisiblePath.dataset.toTable);
+                console.log('✅ Highlighted FK arrow');
+            } else {
+                console.log('❌ Could not find visible path sibling');
             }
         }
     });
+    
+    console.log(`Found ${foundCount} FK arrows from ${tableName}.${columnName}`);
     
     // Highlight the connected tables
     const fromNode = document.querySelector(`[data-table="${tableName}"]`);
@@ -1565,28 +1582,45 @@ function highlightPKRelations(tableName, columnName) {
     console.log('PK Relations for', tableName + '.' + columnName);
     
     // Find all FK arrows that reference this PK
-    // Use the invisible path dataset to find matches
-    const allInvisiblePaths = document.querySelectorAll('path[data-to-table]');
+    // Look for ALL invisible paths and filter
+    const allInvisiblePaths = document.querySelectorAll('path[stroke="transparent"]');
+    let foundCount = 0;
+    
     allInvisiblePaths.forEach(invisiblePath => {
-        if (invisiblePath.dataset.toTable === tableName && 
-            invisiblePath.dataset.toCol === columnName) {
-            // Found an arrow pointing to this PK - highlight the visible path (next sibling)
-            const visiblePath = invisiblePath.nextElementSibling;
-            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+        const toTable = invisiblePath.getAttribute('data-to-table');
+        const toCol = invisiblePath.getAttribute('data-to-col');
+        
+        if (toTable === tableName && toCol === columnName) {
+            foundCount++;
+            console.log('Found FK arrow:', invisiblePath.getAttribute('data-from-table'), '→', tableName);
+            
+            // Find the visible path (next element sibling)
+            let visiblePath = invisiblePath.nextElementSibling;
+            
+            // Skip text nodes and find the actual path element
+            while (visiblePath && visiblePath.nodeType !== 1) {
+                visiblePath = visiblePath.nextSibling;
+            }
+            
+            if (visiblePath && visiblePath.tagName === 'path' && visiblePath.classList.contains('fk-line')) {
                 visiblePath.classList.add('hovered');
                 persistentHighlights.arrows.push(visiblePath);
-                console.log('Highlighted arrow from', invisiblePath.dataset.fromTable, 'to', tableName);
+                console.log('✅ Highlighted arrow');
                 
                 // Also highlight the source table
-                const fromTable = invisiblePath.dataset.fromTable;
+                const fromTable = invisiblePath.getAttribute('data-from-table');
                 const fromNode = document.querySelector(`[data-table="${fromTable}"]`);
                 if (fromNode && !persistentHighlights.tables.includes(fromNode)) {
                     fromNode.classList.add('fk-connected');
                     persistentHighlights.tables.push(fromNode);
                 }
+            } else {
+                console.log('❌ Could not find visible path sibling');
             }
         }
     });
+    
+    console.log(`Found ${foundCount} arrows pointing to ${tableName}.${columnName}`);
     
     // Highlight the PK table itself
     const pkNode = document.querySelector(`[data-table="${tableName}"]`);
