@@ -1,0 +1,187 @@
+{
+  "_meta": {
+    "version": "2.0.0",
+    "description": "Example field mappings: E-commerce monolith \u2192 multi-tenant",
+    "source": "Legacy monolithic database",
+    "targets": [
+      "Per-tenant databases",
+      "Central registry database"
+    ]
+  },
+  "accounts": {
+    "account_name": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "site",
+          "column": "site_name",
+          "sql": "SELECT account_name FROM accounts WHERE account_id = id AND internal_account = 0"
+        },
+        {
+          "db": "central",
+          "table": "sites_registry",
+          "column": "site_name",
+          "sql": "SELECT account_name FROM accounts WHERE account_id = id AND internal_account = 0"
+        }
+      ]
+    },
+    "email": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "users",
+          "column": "email",
+          "sql": "SELECT email FROM accounts WHERE account_id = ? AND internal_account = 0"
+        },
+        {
+          "db": "central",
+          "table": "user_registry",
+          "column": "email",
+          "sql": "SELECT email FROM accounts WHERE internal_account = 0"
+        }
+      ]
+    },
+    "password_hash": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "users",
+          "column": "password_hash",
+          "sql": "SELECT password_hash FROM accounts WHERE account_id = ?"
+        }
+      ]
+    },
+    "is_admin": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "users",
+          "column": "is_admin",
+          "sql": "SELECT is_admin FROM accounts WHERE account_id = ?"
+        }
+      ]
+    },
+    "created_at": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "site",
+          "column": "created_at",
+          "sql": "SELECT created_at FROM accounts WHERE account_id = id"
+        },
+        {
+          "db": "central",
+          "table": "sites_registry",
+          "column": "created_at",
+          "sql": "SELECT created_at FROM accounts WHERE account_id = id"
+        }
+      ]
+    }
+  },
+  "products": {
+    "product_name": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "products",
+          "column": "product_name",
+          "sql": "SELECT product_name FROM products WHERE account_id = ?"
+        }
+      ]
+    },
+    "description": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "products",
+          "column": "description",
+          "sql": "SELECT description FROM products WHERE account_id = ?"
+        }
+      ]
+    },
+    "price": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "products",
+          "column": "price",
+          "sql": "SELECT price FROM products WHERE account_id = ?"
+        }
+      ]
+    }
+  },
+  "orders": {
+    "account_id": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "orders",
+          "column": "user_id",
+          "sql": "SELECT account_id FROM orders WHERE account_id IN (SELECT id FROM accounts WHERE account_id = ?)"
+        }
+      ]
+    },
+    "quantity": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "orders",
+          "column": "quantity",
+          "sql": "SELECT quantity FROM orders"
+        }
+      ]
+    },
+    "total_amount": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "orders",
+          "column": "total_amount",
+          "sql": "SELECT total_amount FROM orders"
+        }
+      ]
+    }
+  },
+  "audit_log": {
+    "action": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "audit_log",
+          "column": "action",
+          "sql": "SELECT action FROM audit_log WHERE account_id IN (SELECT id FROM accounts WHERE account_id = ?)"
+        },
+        {
+          "db": "central",
+          "table": "audit_log",
+          "column": "action",
+          "sql": "SELECT action FROM audit_log"
+        }
+      ]
+    },
+    "ip_address": {
+      "targets": [
+        {
+          "db": "tenant",
+          "table": "audit_log",
+          "column": "ip_address",
+          "sql": "SELECT ip_address FROM audit_log WHERE account_id IN (SELECT id FROM accounts WHERE account_id = ?)"
+        },
+        {
+          "db": "central",
+          "table": "audit_log",
+          "column": "ip_address",
+          "sql": "SELECT ip_address FROM audit_log"
+        }
+      ]
+    }
+  },
+  "_deprecated_tables": [
+    "old_table_to_remove"
+  ],
+  "_deprecated_columns": {
+    "accounts": [
+      "internal_account"
+    ]
+  }
+}
