@@ -19,6 +19,7 @@ def parse_sql_schema(sql_content, schema_name):
     all_fk_relations = []  # Store FK relationships
     
     # Split by CREATE TABLE to handle each table separately
+    # This is more reliable than trying to match the entire CREATE TABLE in one regex
     parts = re.split(r'CREATE TABLE\s+(?:IF NOT EXISTS\s+)?', sql_content, flags=re.IGNORECASE)
     
     for part in parts[1:]:  # Skip first empty part
@@ -255,7 +256,7 @@ def merge_mappings(old_tables, mappings, deprecated_tables):
     return old_tables
 
 
-def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations, github_repo=None):
+def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations):
     """Generate the complete HTML file."""
     
     all_data = {
@@ -1517,25 +1518,33 @@ function highlightFKRelation(tableName, columnName) {
     const table = schema[tableName];
     const column = table?.columns?.find(c => c.name === columnName);
     
-    if (!column || !column.fk || !column.fk_ref) return;
+    if (!column || !column.fk || !column.fk_ref) {
+        console.log('No FK found for', tableName, columnName);
+        return;
+    }
     
     const [refTable, refCol] = column.fk_ref;
+    console.log('FK:', tableName + '.' + columnName, '→', refTable + '.' + refCol);
     
     // Find all FK arrows from this table.column to referenced table
-    const allPaths = document.querySelectorAll('.fk-line');
-    allPaths.forEach(path => {
-        const invisiblePath = path.previousElementSibling;
-        if (invisiblePath && 
-            invisiblePath.dataset.fromTable === tableName && 
+    // Check BOTH invisible path and visible path for dataset
+    const allInvisiblePaths = document.querySelectorAll('path[data-from-table]');
+    allInvisiblePaths.forEach(invisiblePath => {
+        if (invisiblePath.dataset.fromTable === tableName && 
             invisiblePath.dataset.fromCol === columnName) {
-            path.classList.add('hovered');
-            persistentHighlights.arrows.push(path);
+            // Found matching arrow - highlight the visible path (next sibling)
+            const visiblePath = invisiblePath.nextElementSibling;
+            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+                visiblePath.classList.add('hovered');
+                persistentHighlights.arrows.push(visiblePath);
+                console.log('Highlighted arrow from', tableName, 'to', invisiblePath.dataset.toTable);
+            }
         }
     });
     
     // Highlight the connected tables
-    const fromNode = document.querySelector(`[onclick*="'${tableName}'"]`)?.closest('.node');
-    const toNode = document.querySelector(`[onclick*="'${refTable}'"]`)?.closest('.node');
+    const fromNode = document.querySelector(`[data-table="${tableName}"]`);
+    const toNode = document.querySelector(`[data-table="${refTable}"]`);
     
     if (fromNode) {
         fromNode.classList.add('fk-connected');
@@ -1553,28 +1562,34 @@ function highlightFKRelation(tableName, columnName) {
 function highlightPKRelations(tableName, columnName) {
     clearPersistentHighlights();
     
+    console.log('PK Relations for', tableName + '.' + columnName);
+    
     // Find all FK arrows that reference this PK
-    const allPaths = document.querySelectorAll('.fk-line');
-    allPaths.forEach(path => {
-        const invisiblePath = path.previousElementSibling;
-        if (invisiblePath && 
-            invisiblePath.dataset.toTable === tableName && 
+    // Use the invisible path dataset to find matches
+    const allInvisiblePaths = document.querySelectorAll('path[data-to-table]');
+    allInvisiblePaths.forEach(invisiblePath => {
+        if (invisiblePath.dataset.toTable === tableName && 
             invisiblePath.dataset.toCol === columnName) {
-            path.classList.add('hovered');
-            persistentHighlights.arrows.push(path);
-            
-            // Also highlight the source table
-            const fromTable = invisiblePath.dataset.fromTable;
-            const fromNode = document.querySelector(`[onclick*="'${fromTable}'"]`)?.closest('.node');
-            if (fromNode && !persistentHighlights.tables.includes(fromNode)) {
-                fromNode.classList.add('fk-connected');
-                persistentHighlights.tables.push(fromNode);
+            // Found an arrow pointing to this PK - highlight the visible path (next sibling)
+            const visiblePath = invisiblePath.nextElementSibling;
+            if (visiblePath && visiblePath.classList.contains('fk-line')) {
+                visiblePath.classList.add('hovered');
+                persistentHighlights.arrows.push(visiblePath);
+                console.log('Highlighted arrow from', invisiblePath.dataset.fromTable, 'to', tableName);
+                
+                // Also highlight the source table
+                const fromTable = invisiblePath.dataset.fromTable;
+                const fromNode = document.querySelector(`[data-table="${fromTable}"]`);
+                if (fromNode && !persistentHighlights.tables.includes(fromNode)) {
+                    fromNode.classList.add('fk-connected');
+                    persistentHighlights.tables.push(fromNode);
+                }
             }
         }
     });
     
     // Highlight the PK table itself
-    const pkNode = document.querySelector(`[onclick*="'${tableName}'"]`)?.closest('.node');
+    const pkNode = document.querySelector(`[data-table="${tableName}"]`);
     if (pkNode && !persistentHighlights.tables.includes(pkNode)) {
         pkNode.classList.add('fk-connected');
         persistentHighlights.tables.push(pkNode);
@@ -1603,42 +1618,25 @@ renderGraph();
     return html
 
 
-def build_diagram(old_schema=None, tenant_schema=None, central_schema=None, 
-                  mappings=None, output=None, github_repo=None):
-    """
-    Build an interactive schema migration diagram
+def main():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(script_dir)
     
-    Args:
-        old_schema (str): Path to old schema SQL file
-        tenant_schema (str): Path to new tenant schema SQL file  
-        central_schema (str): Path to central schema SQL file
-        mappings (str): Path to field mappings JSON file
-        output (str): Path for output HTML file
-        github_repo (str, optional): GitHub repo for issues (format: owner/repo)
-    
-    Returns:
-        str: Path to generated HTML file
-    """
-    # Default paths (for backward compatibility when called without args)
-    if old_schema is None:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.dirname(os.path.dirname(script_dir))
-        old_schema = os.path.join(repo_root, 'schemas', 'old', 'schema.sql')
-        tenant_schema = os.path.join(repo_root, 'schemas', 'new', 'tenant_schema.sql')
-        central_schema = os.path.join(repo_root, 'schemas', 'new', 'central_schema.sql')
-        mappings = os.path.join(repo_root, 'scripts', 'field_mappings.json')
-        output = os.path.join(repo_root, 'tools', 'schema_diagram.html')
+    # Read schema files
+    old_path = os.path.join(repo_root, 'schemas', 'old', 'schema.sql')
+    new_path = os.path.join(repo_root, 'schemas', 'new', 'tenant_schema.sql')
+    central_path = os.path.join(repo_root, 'schemas', 'new', 'central_schema.sql')
+    mappings_path = os.path.join(repo_root, 'scripts', 'field_mappings.json')
     
     print("Parsing SQL schema files...")
     
-    # Read schema files
-    with open(old_schema, 'r') as f:
+    with open(old_path, 'r') as f:
         old_sql = f.read()
-    with open(tenant_schema, 'r') as f:
+    with open(new_path, 'r') as f:
         new_sql = f.read()
-    with open(central_schema, 'r') as f:
+    with open(central_path, 'r') as f:
         central_sql = f.read()
-    with open(mappings, 'r') as f:
+    with open(mappings_path, 'r') as f:
         mappings_data = json.load(f)
     
     old_tables, old_fk = parse_sql_schema(old_sql, 'old')
@@ -1665,21 +1663,13 @@ def build_diagram(old_schema=None, tenant_schema=None, central_schema=None,
     print(f"  Deprecated fields: {deprecated}")
     
     # Generate HTML
-    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk, github_repo)
+    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk)
     
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output), exist_ok=True)
-    
-    with open(output, 'w') as f:
+    output_path = os.path.join(repo_root, 'tools', 'schema_diagram.html')
+    with open(output_path, 'w') as f:
         f.write(html)
     
-    print(f"\n✅ Generated: {output}")
-    return output
-
-
-def main():
-    """Legacy main function for backward compatibility"""
-    build_diagram()
+    print(f"\n✅ Generated: {output_path}")
 
 
 if __name__ == '__main__':

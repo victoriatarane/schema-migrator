@@ -4,6 +4,8 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/victoriatarane/schema-migrator.svg)](https://github.com/victoriatarane/schema-migrator/stargazers)
+[![Live Demo](https://img.shields.io/badge/demo-live-success.svg)](https://victoriatarane.github.io/schema-migrator/)
 
 ## 🚀 Features
 
@@ -70,6 +72,17 @@ schema-migrator build
 
 This creates `tools/schema_diagram.html` - open it in any browser!
 
+## 🎯 Live Demo
+
+**👉 [Try the Interactive Demo](https://victoriatarane.github.io/schema-migrator/)**
+
+Experience the full functionality:
+- Drag tables to reposition
+- Click tables to view columns and migration details
+- Hover over FK arrows to see relationship details
+- Toggle between Old Schema, New Tenant, and Central DB views
+- Click columns to navigate between schemas
+
 ## 📊 Example Use Case
 
 **Problem**: Legacy monolithic database → Multi-tenant architecture
@@ -82,9 +95,11 @@ This creates `tools/schema_diagram.html` - open it in any browser!
 5. Share with team via GitHub Pages
 6. Discuss changes via GitHub Issues
 
-## 🎨 Screenshot
+## 🎨 Features in Action
 
-![Schema Diagram Example](docs/images/screenshot.png)
+![Schema Diagram](https://user-images.githubusercontent.com/placeholder/schema-migrator-demo.png)
+
+*Interactive ER diagram with drag-and-drop, FK relationships, and field lineage tracking*
 
 ## 🔧 Advanced Usage
 
