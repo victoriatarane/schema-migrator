@@ -256,8 +256,115 @@ def merge_mappings(old_tables, mappings, deprecated_tables):
     return old_tables
 
 
-def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations, github_repo=None):
-    """Generate the complete HTML file."""
+def generate_reverse_mappings(mappings):
+    """
+    Generate reverse mappings from new tables back to old tables.
+    
+    This allows the UI to show which old table(s) a new table came from,
+    enabling bidirectional navigation in the diagram.
+    
+    Args:
+        mappings (dict): Field mappings from old tables to new tables
+        
+    Returns:
+        dict: Reverse mappings structure:
+            {
+                'tenant': {
+                    'table_name': {
+                        'sources': ['old_table1', 'old_table2'],
+                        'fields': {
+                            'new_field': [
+                                {'old_table': 'x', 'old_field': 'y', 'sql': '...'},
+                                ...
+                            ]
+                        }
+                    }
+                },
+                'central': { ... }
+            }
+    """
+    reverse_map = {
+        'tenant': {},
+        'central': {}
+    }
+    
+    for old_table, fields in mappings.items():
+        # Skip metadata keys
+        if old_table.startswith('_'):
+            continue
+            
+        for old_field, mapping in fields.items():
+            if not isinstance(mapping, dict):
+                continue
+                
+            # Get target(s)
+            targets = []
+            if 'targets' in mapping and mapping['targets']:
+                targets = mapping['targets']
+            elif 'target' in mapping and mapping['target']:
+                target = mapping['target']
+                if isinstance(target, list):
+                    targets = target
+                elif target:
+                    targets = [target]
+            
+            # Process each target
+            for target in targets:
+                if not target:
+                    continue
+                    
+                # Parse target: could be string "table.field" or dict
+                if isinstance(target, str):
+                    parts = target.split('.')
+                    if len(parts) < 2:
+                        continue
+                    new_table = parts[0]
+                    new_field = '.'.join(parts[1:])
+                    schema_type = 'tenant'  # Default
+                else:
+                    # Dict format: {'table': 'x', 'column': 'y', 'sql': '...'}
+                    new_table = target.get('table', '')
+                    new_field = target.get('column', '')
+                    schema_type = 'tenant'  # Default
+                
+                # Determine schema type from table name
+                if new_table.startswith('central_') or new_table in ['sites_registry', 'tenant_domains', 'total_activity_metrics', 
+                                                                       'global_user_cache', 'task_run_details', 'job_status_mapping',
+                                                                       'user_licenses', 'services', 'container_descriptions', 'rsi_config',
+                                                                       'support_ticket_cache', 'ms365_tenant_config']:
+                    schema_type = 'central'
+                
+                # Initialize reverse mapping structure
+                if new_table not in reverse_map[schema_type]:
+                    reverse_map[schema_type][new_table] = {
+                        'sources': set(),
+                        'fields': {}
+                    }
+                
+                # Add source table
+                reverse_map[schema_type][new_table]['sources'].add(old_table)
+                
+                # Add field mapping
+                if new_field not in reverse_map[schema_type][new_table]['fields']:
+                    reverse_map[schema_type][new_table]['fields'][new_field] = []
+                
+                reverse_map[schema_type][new_table]['fields'][new_field].append({
+                    'old_table': old_table,
+                    'old_field': old_field,
+                    'sql': mapping.get('sql'),
+                    'note': mapping.get('note')
+                })
+    
+    # Convert sets to sorted lists
+    for schema_type in reverse_map:
+        for table in reverse_map[schema_type]:
+            reverse_map[schema_type][table]['sources'] = sorted(list(reverse_map[schema_type][table]['sources']))
+    
+    return reverse_map
+
+
+def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations, reverse_mappings=None, github_repo=None):
+    """Generate the complete HTML file with bidirectional relationship support."""
     
     all_data = {
         'old': old_tables,
@@ -270,6 +377,10 @@ def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_
         'new': new_fk_relations,
         'central': central_fk_relations
     }
+    
+    # Add reverse mappings for bidirectional navigation
+    if reverse_mappings is None:
+        reverse_mappings = {'tenant': {}, 'central': {}}
     
     html = '''<!DOCTYPE html>
 <html lang="en">
@@ -467,6 +578,8 @@ def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_
 const schemaData = ''' + json.dumps(all_data, indent=2) + ''';
 
 const fkRelations = ''' + json.dumps(all_fk, indent=2) + ''';
+
+const reverseMappings = ''' + json.dumps(reverse_mappings, indent=2) + ''';
 
 const categories = {
     core: { name: 'Core', color: 'core' },
@@ -1114,6 +1227,27 @@ function showPanel(name) {
         document.getElementById('detailBadge').textContent = categories[currentTable.category]?.name || currentTable.category;
     }
     
+    // Show source tables section for new/central views
+    let sourceHtml = '';
+    if (currentView !== 'old' && reverseMappings) {
+        const schemaType = currentView === 'new' ? 'tenant' : 'central';
+        const tableReverse = reverseMappings[schemaType]?.[name];
+        
+        if (tableReverse && tableReverse.sources && tableReverse.sources.length > 0) {
+            sourceHtml = '<div style="margin-bottom:12px;padding:10px;background:var(--card);border:1px solid var(--border);border-radius:6px;">';
+            sourceHtml += '<div style="font-size:11px;font-weight:600;color:var(--blue);margin-bottom:6px;">📋 Source Tables (Old Schema)</div>';
+            sourceHtml += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+            
+            tableReverse.sources.forEach(srcTable => {
+                sourceHtml += `<span style="padding:4px 10px;background:var(--bg);border:1px solid var(--blue);border-radius:4px;font-size:10px;color:var(--blue);cursor:pointer;" onclick="navigateTo('old','${srcTable}',null)" title="Click to view ${srcTable} in old schema">`;
+                sourceHtml += `${srcTable}`;
+                sourceHtml += '</span>';
+            });
+            
+            sourceHtml += '</div></div>';
+        }
+    }
+    
     // Build comparison table - show 2 or 3 columns depending on view
     const schemaLabels = {
         'old': { col1: 'Old Schema (ctxweb)', col2: 'Migrates to Tenant DB →', col3: 'Migrates to Central DB →', showCol3: true },
@@ -1122,7 +1256,7 @@ function showPanel(name) {
     };
     const labels = schemaLabels[currentView] || schemaLabels['old'];
     
-    let html = '<div style="margin-bottom:10px;font-size:11px;color:var(--dim)">Click any column for detailed migration info. <span class="hide-on-small">Showing migration relationships. <strong style="color:var(--purple)">💡 Tip:</strong> Click PK/FK badges to highlight arrows!</span></div>';
+    let html = sourceHtml + '<div style="margin-bottom:10px;font-size:11px;color:var(--dim)">Click any column for detailed migration info. <span class="hide-on-small">Showing migration relationships. <strong style="color:var(--purple)">💡 Tip:</strong> Click PK/FK badges to highlight arrows!</span></div>';
     html += `<table class="comparison-table ${labels.showCol3 ? '' : 'two-column'}"><thead><tr>`;
     html += `<th class="schema-col old-schema">${labels.col1}</th>`;
     html += `<th class="schema-col new-schema">${labels.col2}</th>`;
@@ -1188,7 +1322,27 @@ function showPanel(name) {
                 }
             } else {
                 // NEW/CENTRAL VIEW: Show source from old schema (clickable!)
-                if (col.source) {
+                // Use reverse mappings for accurate source information
+                const schemaType = currentView === 'new' ? 'tenant' : 'central';
+                const fieldSources = reverseMappings?.[schemaType]?.[name]?.fields?.[col.name];
+                
+                if (fieldSources && fieldSources.length > 0) {
+                    html += '<div style="display:flex;flex-direction:column;gap:3px;">';
+                    fieldSources.forEach(src => {
+                        const srcTable = src.old_table;
+                        const srcCol = src.old_field;
+                        const hasTransform = src.sql && src.sql.trim() !== '';
+                        
+                        html += `<div style="cursor:pointer;padding:2px 6px;background:var(--bg);border-left:2px solid var(--blue);border-radius:3px;word-wrap:break-word;overflow-wrap:break-word;" onclick="navigateTo('old','${srcTable}','${srcCol}')" title="${hasTransform ? 'Transformed: ' + (src.sql || '') : 'Direct mapping'}">`;
+                        html += `<span class="col-name" style="word-break:break-word;">${srcTable}.${srcCol}</span>`;
+                        if (hasTransform) {
+                            html += '<span style="color:var(--yellow);margin-left:4px;font-size:9px;" title="Field transformation applied">⚙️</span>';
+                        }
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                } else if (col.source) {
+                    // Fallback to old source property if reverse mapping not found
                     let srcTable, srcCol;
                     const src = col.source.trim();
                     
@@ -1687,6 +1841,9 @@ def build_diagram(old_schema=None, tenant_schema=None, central_schema=None,
     # Merge mappings into old schema
     old_tables = merge_mappings(old_tables, field_mappings, deprecated_tables)
     
+    # Generate reverse mappings for bidirectional navigation
+    reverse_mappings = generate_reverse_mappings(field_mappings)
+    
     # Count mappings
     mapped = sum(1 for t in old_tables.values() for c in t['columns'] if c.get('target'))
     deprecated = sum(1 for t in old_tables.values() for c in t['columns'] if c.get('deprecated'))
@@ -1694,7 +1851,7 @@ def build_diagram(old_schema=None, tenant_schema=None, central_schema=None,
     print(f"  Deprecated fields: {deprecated}")
     
     # Generate HTML
-    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk, github_repo)
+    html = generate_html(old_tables, new_tables, central_tables, old_fk, new_fk, central_fk, reverse_mappings, github_repo)
     
     # Use provided output path or default
     if output is None:

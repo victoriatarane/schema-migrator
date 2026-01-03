@@ -434,3 +434,4 @@ Not yet supported. Workaround: merge schemas into one file with table name prefi
 
 **Next**: [Field Mapping Syntax](FIELD_MAPPINGS.md)
 
+

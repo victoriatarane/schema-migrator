@@ -372,3 +372,4 @@ CREATE TABLE audit_log (
     
     print("  ✅ Created example schemas (E-commerce migration)")
 
+
