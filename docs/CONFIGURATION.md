@@ -241,7 +241,7 @@ schema-migrator build \
   --schemas-dir schemas \
   --mappings scripts/field_mappings.json \
   --output tools/schema_diagram.html \
-  --github-repo victoriatarane/my-migration-project
+  --github-repo YOUR_USERNAME/your-migration-project
 ```
 
 ### Options Reference
@@ -261,8 +261,8 @@ schema-migrator build \
 
 ```json
 {
-  "repo_owner": "victoriatarane",
-  "repo_name": "my-migration-project",
+  "repo_owner": "YOUR_USERNAME",
+  "repo_name": "your-migration-project",
   "enable_comments": true,
   "issue_labels": ["schema-question", "needs-review"]
 }
@@ -271,7 +271,7 @@ schema-migrator build \
 2. Use `--github-repo` flag:
 
 ```bash
-schema-migrator build --github-repo victoriatarane/my-migration-project
+schema-migrator build --github-repo YOUR_USERNAME/your-migration-project
 ```
 
 ### Issue Templates
@@ -282,7 +282,7 @@ Copy templates from schema-migrator repo:
 cp -r node_modules/schema-migrator/.github/ISSUE_TEMPLATE .github/
 ```
 
-Or download from: [GitHub Templates](https://github.com/victoriatarane/schema-migrator/tree/main/.github/ISSUE_TEMPLATE)
+Or download from: [GitHub Templates](https://github.com/YOUR_USERNAME/schema-migrator/tree/main/.github/ISSUE_TEMPLATE)
 
 ## Environment Variables
 
@@ -307,7 +307,7 @@ Create `.env` in project root:
 SCHEMA_MIGRATOR_SCHEMAS_DIR=schemas
 SCHEMA_MIGRATOR_MAPPINGS=scripts/field_mappings.json
 SCHEMA_MIGRATOR_OUTPUT=tools/schema_diagram.html
-GITHUB_REPO=victoriatarane/my-migration-project
+GITHUB_REPO=YOUR_USERNAME/your-migration-project
 ```
 
 ## Output Configuration

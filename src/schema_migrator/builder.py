@@ -176,34 +176,39 @@ def parse_sql_schema(sql_content, schema_name):
 
 
 def categorize_table(table_name, schema_name):
+    """
+    Categorize tables by name patterns.
+    Returns category for color-coding in diagram.
+    """
     name = table_name.lower()
     if schema_name == 'central':
         return 'central'
-    if name in ('sysadmin_systemsettings', 'account_info', 'sysadmin_services'):
-        return 'core'
-    elif name in ('series', 'report_data', 'report_file', 'dicom_tags', 'magnets', 'dicom_dictionary'):
-        return 'imaging'
-    elif 'config' in name or 'option' in name or 'routing' in name or 'rsi' in name:
+    
+    # Pattern-based categorization
+    if 'config' in name or 'setting' in name or 'option' in name or 'routing' in name:
         return 'config'
-    elif 'job' in name or 'container' in name or 'upload' in name or 'task' in name:
+    elif 'job' in name or 'task' in name or 'queue' in name or 'worker' in name:
         return 'jobs'
-    elif 'license' in name or 'ms365' in name or 'session' in name:
+    elif 'auth' in name or 'login' in name or 'session' in name or 'token' in name or 'license' in name:
         return 'auth'
-    elif 'audit' in name or 'devlog' in name or 'log' in name:
+    elif 'audit' in name or 'log' in name or 'event' in name or 'history' in name:
         return 'logging'
-    elif 'metric' in name or 'trend' in name or 'activity' in name:
+    elif 'metric' in name or 'stat' in name or 'analytics' in name or 'report' in name:
         return 'metrics'
-    elif 'status' in name or 'mapping' in name or 'qcscore' in name or 'dictionary' in name:
+    elif 'lookup' in name or 'dictionary' in name or 'enum' in name or 'reference' in name:
         return 'lookup'
-    elif name.startswith('test') or 'reference' in name or 'structure' in name or 'protocol' in name:
+    elif name.startswith('test') or name.startswith('tmp') or 'temp' in name or 'deprecated' in name:
         return 'legacy'
-    elif name in ('site', 'users'):
+    elif name in ('users', 'accounts', 'customers', 'clients', 'tenants', 'sites', 'organizations'):
         return 'core'
-    elif name in ('patients', 'studies'):
-        return 'imaging'
-    elif 'processing' in name:
-        return 'jobs'
-    return 'core'
+    elif 'user' in name or 'account' in name or 'customer' in name or 'profile' in name:
+        return 'core'
+    elif 'order' in name or 'payment' in name or 'transaction' in name or 'invoice' in name:
+        return 'core'
+    elif 'product' in name or 'inventory' in name or 'catalog' in name or 'item' in name:
+        return 'core'
+    
+    return 'core'  # Default
 
 
 def merge_mappings(old_tables, mappings, deprecated_tables):
@@ -327,11 +332,12 @@ def generate_reverse_mappings(mappings):
                     new_field = target.get('column', '')
                     schema_type = 'tenant'  # Default
                 
-                # Determine schema type from table name
-                if new_table.startswith('central_') or new_table in ['sites_registry', 'tenant_domains', 'total_activity_metrics', 
-                                                                       'global_user_cache', 'task_run_details', 'job_status_mapping',
-                                                                       'user_licenses', 'services', 'container_descriptions', 'rsi_config',
-                                                                       'support_ticket_cache', 'ms365_tenant_config']:
+                # Determine schema type from table name (pattern-based)
+                if (new_table.startswith('central_') or 
+                    new_table.endswith('_registry') or 
+                    new_table.endswith('_cache') or
+                    'global_' in new_table or
+                    'tenant_config' in new_table):
                     schema_type = 'central'
                 
                 # Initialize reverse mapping structure
@@ -1355,7 +1361,8 @@ function showPanel(name) {
                         srcTable = parts[0];
                         srcCol = parts.length > 1 ? parts[1] : null;
                     } else {
-                        srcTable = 'sysadmin_systemsettings';
+                        // Column name only - source table unknown
+                        srcTable = 'unknown';
                         srcCol = src;
                     }
                     
@@ -1502,8 +1509,8 @@ function selectColumn(tableName, colName) {
                 srcTable = parts[0];
                 srcCol = parts.length > 1 ? parts[1] : null;
             } else {
-                // Just column name - assume sysadmin_systemsettings as default source table
-                srcTable = 'sysadmin_systemsettings';
+                // Just column name - source table not specified
+                srcTable = 'unknown';
                 srcCol = src;
             }
             
