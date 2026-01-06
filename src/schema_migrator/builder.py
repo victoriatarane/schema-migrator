@@ -387,7 +387,7 @@ def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CTX Schema Migration - Complete</title>
+    <title>Schema Migration Diagram</title>
     <style>
         :root {
             --bg: #0d1117; --card: #161b22; --border: #30363d;
@@ -548,7 +548,7 @@ def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_
 </head>
 <body>
     <div class="header">
-        <h1>📊 CTX Schema Migration</h1>
+        <h1>📊 Schema Migration Diagram</h1>
         <div class="tabs">
             <button class="tab active" data-view="old">Old Schema</button>
             <button class="tab" data-view="new">New Tenant</button>
@@ -1250,7 +1250,7 @@ function showPanel(name) {
     
     // Build comparison table - show 2 or 3 columns depending on view
     const schemaLabels = {
-        'old': { col1: 'Old Schema (ctxweb)', col2: 'Migrates to Tenant DB →', col3: 'Migrates to Central DB →', showCol3: true },
+        'old': { col1: 'Old Schema', col2: 'Migrates to Tenant DB →', col3: 'Migrates to Central DB →', showCol3: true },
         'new': { col1: 'New Tenant DB', col2: 'Source from Old Schema ←', col3: '', showCol3: false },
         'central': { col1: 'Central DB', col2: 'Source from Old Schema ←', col3: '', showCol3: false }
     };
@@ -1420,7 +1420,7 @@ function selectColumn(tableName, colName) {
     let html = '<div class="migration-title">Column Details</div>';
     
     // Current column info
-    const schemaLabel = currentView === 'old' ? 'ctxweb (Old)' : (currentView === 'central' ? 'Central DB' : 'Tenant DB');
+    const schemaLabel = currentView === 'old' ? 'Old Schema' : (currentView === 'central' ? 'Central DB' : 'Tenant DB');
     html += `<div class="lineage-box" style="border-left-color:var(--blue)">
         <div class="lineage-label">Current: ${schemaLabel}</div>
         <div class="lineage-value">${tableName}.${colName}</div>
@@ -1507,7 +1507,7 @@ function selectColumn(tableName, colName) {
                 srcCol = src;
             }
             
-            const srcLabel = srcView === 'new' ? 'Tenant DB' : 'ctxweb (Old)';
+            const srcLabel = srcView === 'new' ? 'Tenant DB' : 'Old Schema';
             html += '<div class="lineage-arrow" style="color:var(--orange)">↑ source from</div>';
             html += `<div class="lineage-box source clickable" onclick="navigateTo('${srcView}','${srcTable}','${srcCol || ''}')">
                 <div class="lineage-label">Source (${srcLabel}) <span style="font-size:8px;color:var(--blue)">→ click to view</span></div>

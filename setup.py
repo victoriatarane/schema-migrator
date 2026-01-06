@@ -14,10 +14,10 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="schema-migrator",
-    version="1.1.0",
+    version="1.2.0",
     author="Victoria Tarane",
     author_email="victoriatarane@gmail.com",
-    description="Interactive database schema migration toolkit with visual lineage tracking",
+    description="Interactive database schema migration toolkit with visual lineage tracking and JSON-driven execution",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/victoriatarane/schema-migrator",

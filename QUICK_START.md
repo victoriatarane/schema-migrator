@@ -9,7 +9,7 @@
    - Example schemas (e-commerce)
    - Ready for GitHub & PyPI
 
-2. **`ctx-schema-migration/`** - Your **PRIVATE** internal project
+2. **`-schema-migration/`** - Your **PRIVATE** internal project
    - Company-specific schemas
    - Uses the `schema-migrator` package
    - Stays confidential
@@ -19,7 +19,7 @@
 ### Step 1: Review & Update Personal Info
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator
+cd ../schema-migrator
 
 # Update these files with your info:
 # - README.md: Replace YOUR_USERNAME with your GitHub username
@@ -30,7 +30,7 @@ cd /Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator
 ### Step 2: Initialize Git & Push
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator
+cd .../schema-migrator
 
 # Initialize git
 git init
@@ -103,16 +103,16 @@ git checkout main
 
 ## 🔒 Keep Internal Project Private
 
-Your `ctx-schema-migration/` directory is **separate** and contains proprietary data:
+Your `schema-migration/` directory is **separate** and contains proprietary data:
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/ctx-schema-migration
+cd .../schema-migration
 
 # Option 1: Private GitHub repo (in your organization)
 git init
 git add .
 git commit -m "Internal migration project"
-# gh repo create healthlytix/ctx-schema-migration --private
+# gh repo create schema-migration --private
 
 # Option 2: Just keep it local (no git)
 # Back up regularly to secure location
@@ -187,7 +187,7 @@ git commit -m "Internal migration project"
 A: Yes! The internal project already uses this package:
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/ctx-schema-migration
+cd .../schema-migration
 pip install -e ../schema-migrator
 python scripts/build_diagram.py  # Uses the package!
 ```
@@ -200,14 +200,14 @@ cd schema-migrator
 git commit -m "feat: Add new feature"
 git push
 
-cd ../ctx-schema-migration
+cd .../schema-migration
 pip install -e ../schema-migrator --force-reinstall
 ```
 
 **Q: Is my company data safe?**
 A: Yes! The two directories are completely separate:
 - `schema-migrator/` = public package (generic examples)
-- `ctx-schema-migration/` = private data (stays local)
+- `schema-migration/` = private data (stays local)
 
 ## 📞 Questions?
 

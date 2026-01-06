@@ -1,12 +1,17 @@
 """
 Schema Migrator - Interactive Database Schema Migration Toolkit
+
+Provides:
+1. Diagram Generation: Visual HTML diagrams of schema relationships
+2. Migration Execution: Run migrations from field_mappings.json (v1.2.0+)
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Victoria Tarane"
 
 from .builder import build_diagram
+from .executor import MigrationExecutor, migrate_from_json
 
-__all__ = ["build_diagram"]
+__all__ = ["build_diagram", "MigrationExecutor", "migrate_from_json"]
 
 

@@ -6,9 +6,10 @@
 2. [Quick Start](#quick-start)
 3. [Project Structure](#project-structure)
 4. [Field Mappings](#field-mappings)
-5. [GitHub Integration](#github-integration)
-6. [Customization](#customization)
-7. [Advanced Features](#advanced-features)
+5. [Executing Migrations](#executing-migrations) ⭐ NEW
+6. [GitHub Integration](#github-integration)
+7. [Customization](#customization)
+8. [Advanced Features](#advanced-features)
 
 ## Installation
 
@@ -250,6 +251,93 @@ Mark fields that won't be migrated:
   }
 }
 ```
+
+## Executing Migrations
+
+### Overview (v1.2.0+)
+
+Starting with v1.2.0, schema-migrator can **execute migrations** directly from `field_mappings.json`. This makes JSON the **single source of truth** for both visualization AND execution.
+
+**Key Benefit:** Diagram and migration logic can never drift apart!
+
+### Basic Usage
+
+```python
+import pymysql
+from schema_migrator import MigrationExecutor
+
+# Connect to database
+conn = pymysql.connect(
+    host='localhost',
+    user='root',
+    password='your_password',
+    cursorclass=pymysql.cursors.DictCursor
+)
+
+# Initialize executor
+executor = MigrationExecutor(
+    mappings_file='scripts/field_mappings.json',
+    source_conn=conn,
+    source_db='legacy_db'
+)
+
+# Migrate a table
+stats = executor.migrate_table(
+    old_table='users',
+    target_db='app_tenant_abc',
+    target_db_type='tenant',
+    filters={'is_active': 1}
+)
+
+print(f"✓ Migrated: {stats['migrated']} rows")
+```
+
+### Incremental Migration (Tenant-by-Tenant)
+
+```python
+# Migrate one tenant at a time
+for tenant in tenants:
+    stats = executor.migrate_table(
+        old_table='users',
+        target_db=f'app_tenant_{tenant["slug"]}',
+        target_db_type='tenant',
+        filters={'tenant_id': tenant['id']}
+    )
+    print(f"✓ {tenant['name']}: {stats['migrated']} users")
+```
+
+### FK Resolution
+
+```python
+# Build ID map for foreign key resolution
+user_id_map = {}
+with conn.cursor() as cursor:
+    cursor.execute("USE app_tenant_abc")
+    cursor.execute("SELECT legacy_user_id, id FROM users")
+    for row in cursor.fetchall():
+        user_id_map[row['legacy_user_id']] = row['id']
+
+# Migrate with FK resolution
+stats = executor.migrate_table(
+    old_table='activity_log',
+    target_db='app_tenant_abc',
+    target_db_type='tenant',
+    id_map=user_id_map  # Resolve FK references
+)
+```
+
+### Why This Matters
+
+**Before v1.2.0:**
+- `field_mappings.json` → Diagram (documentation)
+- `migrate_script.py` → Execution (actual code)
+- ❌ Risk: They can drift apart!
+
+**v1.2.0+:**
+- `field_mappings.json` → **Single source of truth**
+- Diagram reads JSON → Visual docs
+- Executor reads JSON → Migration
+- ✅ **Impossible to drift!**
 
 ## GitHub Integration
 

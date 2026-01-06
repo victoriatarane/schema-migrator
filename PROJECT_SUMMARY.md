@@ -4,8 +4,6 @@
 
 ### 1. **Public Portfolio Package** (`schema-migrator/`)
 
-**Location**: `/Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator/`
-
 **Status**: ✅ Git initialized, ready to push
 
 **Contains**:
@@ -18,7 +16,7 @@ schema-migrator/
 │       └── migration_suggestion.yml # For suggesting changes
 ├── src/schema_migrator/            # Python package
 │   ├── __init__.py                 # Package init
-│   ├── builder.py                  # Core diagram generator (from ctx-schema-migration)
+│   ├── builder.py                  # Core diagram generator (from schema-migration)
 │   ├── cli.py                      # Command-line interface
 │   └── examples.py                 # Generic example schemas (e-commerce)
 ├── docs/
@@ -41,15 +39,13 @@ schema-migrator/
 - ✅ Ready for PyPI publication
 - ✅ Portfolio-ready README
 
-### 2. **Internal Migration Project** (`ctx-schema-migration/`)
-
-**Location**: `/Users/victoriatarane/projects/dashboard-cortechs-ai/ctx-schema-migration/`
+### 2. **Internal Migration Project** (`schema-migration/`)
 
 **Status**: ✅ Preserved with all your company data
 
 **Contains**:
 ```
-ctx-schema-migration/
+schema-migration/
 ├── schemas/
 │   ├── old/
 │   │   └── schema.sql              # REAL company schema (90 tables, 457 columns)
@@ -76,8 +72,6 @@ ctx-schema-migration/
 ### Quick Commands
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator
-
 # 1. Review and update your personal info
 #    - README.md: Replace YOUR_USERNAME with your GitHub username
 #    - setup.py: Update author_email
@@ -109,8 +103,8 @@ See `QUICK_START.md` for detailed instructions!
 - ✅ MIT License (open source)
 - ✅ Your personal contact info
 
-### Private Repo (`ctx-schema-migration`)
-- 🔒 Real company schemas (ctxweb, etc.)
+### Private Repo (`schema-migration`)
+- 🔒 Real company schemas
 - 🔒 Real field mappings (215 fields)
 - 🔒 Real migration scripts
 - 🔒 Company-specific logic
@@ -133,7 +127,7 @@ graph LR
 
 ```bash
 # 1. Work on internal migration
-cd ctx-schema-migration
+cd schema-migration
 python scripts/build_diagram.py  # Uses the package
 
 # 2. You discover a bug in arrow routing
@@ -149,7 +143,7 @@ git commit -m "fix: Arrow routing overlap issue"
 git push origin main
 
 # 6. Update internal project
-cd ../ctx-schema-migration
+cd ../schema-migration
 pip install -e ../schema-migrator --force-reinstall
 
 # 7. Re-generate with fix applied
@@ -214,7 +208,7 @@ After using it successfully internally, I abstracted it into a reusable package 
 
 ### Company Use
 
-The `ctx-schema-migration` project benefits from:
+The `schema-migration` project benefits from:
 - ✅ Professional diagram for stakeholder presentations
 - ✅ Clear field lineage documentation
 - ✅ Verified migration logic (215 fields mapped, 136 deprecated)
@@ -286,7 +280,6 @@ This is a **portfolio-worthy project** that demonstrates:
 ## 🚀 Final Step
 
 ```bash
-cd /Users/victoriatarane/projects/dashboard-cortechs-ai/schema-migrator
 
 # Update personal info, then:
 git commit -m "Initial commit: Schema Migrator v1.0.0"

@@ -10,8 +10,11 @@
 ## 🚀 Features
 
 - **Interactive Schema Visualization** - Drag-and-drop ER diagram with FK relationships
+- **JSON-Driven Execution** ⭐ NEW - Execute migrations directly from field_mappings.json
 - **Multi-Target Migration** - Migrate one source field to multiple destination databases
+- **Dual-Database Support** - Separate tenant and central databases
 - **Field Lineage Tracking** - Click any column to see its source/destination across schemas
+- **Single Source of Truth** - JSON config drives both diagram AND execution
 - **GitHub Issues Integration** - Comment and discuss schema changes directly in the diagram
 - **Responsive Design** - Works on any screen size with adaptive layouts
 - **Zero Database Connection** - Static HTML generation from SQL schema files
@@ -71,6 +74,34 @@ schema-migrator build
 ```
 
 This creates `tools/schema_diagram.html` - open it in any browser!
+
+### 4. Execute Migration (New in v1.2.0!)
+
+```python
+import pymysql
+from schema_migrator import MigrationExecutor
+
+# Connect to database
+conn = pymysql.connect(host='localhost', user='root', password='pass', 
+                       cursorclass=pymysql.cursors.DictCursor)
+
+# Initialize executor
+executor = MigrationExecutor(
+    mappings_file='scripts/field_mappings.json',
+    source_conn=conn,
+    source_db='legacy_db'
+)
+
+# Migrate a table
+stats = executor.migrate_table(
+    old_table='users',
+    target_db='app_tenant_abc',
+    target_db_type='tenant',
+    filters={'is_active': 1, 'tenant_id': 123}
+)
+
+print(f"✓ Migrated: {stats['migrated']} rows")
+```
 
 ## 🎯 Live Demo
 
@@ -168,13 +199,39 @@ schema-migrator build --with-migration
 schema-migrator validate
 ```
 
+## 💡 Why Use This Tool?
+
+### Single Source of Truth (v1.2.0+)
+
+**Problem:** Separate documentation and execution can drift apart
+- `field_mappings.json` → Diagram (what stakeholders see)
+- `migrate_script.py` → Execution (what actually runs)
+- ❌ Risk: They get out of sync!
+
+**Solution:** JSON drives BOTH diagram and execution
+- ✅ Diagram reads JSON → Visual documentation
+- ✅ Executor reads JSON → Actual migration
+- ✅ **Impossible to drift!**
+
+### Competitive Advantage
+
+| Feature | Liquibase | Flyway | dbt | This Tool |
+|---------|:---------:|:------:|:---:|:---------:|
+| Schema versioning | ✅ | ✅ | ❌ | ⚠️ |
+| Data migration | ❌ | ❌ | ✅ | ✅ |
+| Complex transformations | ⚠️ | ⚠️ | ✅ | ✅ |
+| Multi-target fields | ❌ | ❌ | ❌ | 🏆 |
+| Interactive visualization | ❌ | ❌ | ⚠️ | 🏆 |
+| JSON config | ❌ | ❌ | ⚠️ | ✅ |
+| Single source of truth | ✅ | ✅ | ✅ | 🏆 |
+
+**Best for:** Complex schema refactoring, multi-tenant migrations, incremental rollouts
+
 ## 📚 Documentation
 
-- [Installation Guide](docs/INSTALLATION.md)
-- [Configuration Reference](docs/CONFIGURATION.md)
-- [Field Mapping Syntax](docs/FIELD_MAPPINGS.md)
-- [GitHub Integration](docs/GITHUB_INTEGRATION.md)
+- [Usage Guide](docs/USAGE_GUIDE.md)
 - [Contributing](CONTRIBUTING.md)
+- [Quick Start](QUICK_START.md)
 
 ## 🤝 Contributing
 
