@@ -75,7 +75,7 @@ schema-migrator build
 
 This creates `tools/schema_diagram.html` - open it in any browser!
 
-### 4. Execute Migration (New in v1.2.0!)
+### 4. Execute Migration (Production-Ready in v1.3.0!)
 
 ```python
 import pymysql
@@ -127,10 +127,6 @@ Experience the full functionality:
 6. Discuss changes via GitHub Issues
 
 ## 🎨 Features in Action
-
-![Schema Diagram](https://user-images.githubusercontent.com/placeholder/schema-migrator-demo.png)
-
-*Interactive ER diagram with drag-and-drop, FK relationships, and field lineage tracking*
 
 ## 🔧 Advanced Usage
 

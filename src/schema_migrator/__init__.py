@@ -6,7 +6,7 @@ Provides:
 2. Migration Execution: Run migrations from field_mappings.json (v1.2.0+)
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __author__ = "Victoria Tarane"
 
 from .builder import build_diagram

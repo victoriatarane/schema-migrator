@@ -14,7 +14,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="schema-migrator",
-    version="1.2.0",
+    version="1.3.0",
     author="Victoria Tarane",
     author_email="victoriatarane@gmail.com",
     description="Interactive database schema migration toolkit with visual lineage tracking and JSON-driven execution",
