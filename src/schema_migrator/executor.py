@@ -45,6 +45,9 @@ class MigrationExecutor:
         with open(mappings_file, 'r') as f:
             self.mappings = json.load(f)
         
+        # Cache for unique constraint detection: {db_name.table_name: [unique_columns]}
+        self.unique_constraints_cache: Dict[str, List[List[str]]] = {}
+        
         # Universal ID mapping cache: { 'table_name': { 'lookup_column': { old_value: new_id } } }
         # Example: { 'users': { 'username': { 'admin': 1, 'user2': 2 } } }
         #          { 'patients': { 'patient_id': { 'PAT001': 1, 'PAT002': 2 } } }
@@ -428,6 +431,43 @@ class MigrationExecutor:
         
         return sorted_tables
     
+    def _get_unique_constraints(self, db_name: str, table_name: str) -> List[List[str]]:
+        """
+        Get unique constraint columns for a table.
+        Returns list of lists: [[col1, col2], [col3]] for composite and single unique keys.
+        Caches results for performance.
+        """
+        cache_key = f"{db_name}.{table_name}"
+        if cache_key in self.unique_constraints_cache:
+            return self.unique_constraints_cache[cache_key]
+        
+        unique_constraints = []
+        
+        try:
+            with self.source_conn.cursor(pymysql.cursors.DictCursor) as cursor:
+                cursor.execute(f"USE `{db_name}`")
+                cursor.execute(f"""
+                    SELECT 
+                        INDEX_NAME,
+                        GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) as columns
+                    FROM INFORMATION_SCHEMA.STATISTICS
+                    WHERE TABLE_SCHEMA = %s
+                      AND TABLE_NAME = %s
+                      AND NON_UNIQUE = 0
+                      AND INDEX_NAME != 'PRIMARY'
+                    GROUP BY INDEX_NAME
+                """, (db_name, table_name))
+                
+                for row in cursor.fetchall():
+                    cols = row['columns'].split(',')
+                    unique_constraints.append(cols)
+        
+        except Exception as e:
+            logger.warning(f"Could not detect unique constraints for {cache_key}: {e}")
+        
+        self.unique_constraints_cache[cache_key] = unique_constraints
+        return unique_constraints
+    
     def _migrate_to_target(
         self,
         old_table: str,
@@ -487,22 +527,49 @@ class MigrationExecutor:
                     if target_table in ['rsi_config', 'user_licenses', 'devlog', 'total_activity_metrics']:
                         insert_data['site_uuid'] = site_uuid
                 
-                # Build and execute INSERT
+                # Build and execute INSERT (with UPSERT for deduplication)
                 try:
                     columns = list(insert_data.keys())
                     placeholders = ["%s"] * len(columns)
                     values = list(insert_data.values())
                     
+                    # Detect unique constraints for deduplication
+                    unique_constraints = self._get_unique_constraints(target_db, target_table)
+                    
+                    # Build INSERT with ON DUPLICATE KEY UPDATE if unique constraints exist
                     sql = f"""
                         INSERT INTO `{target_table}` 
                         ({', '.join(f'`{c}`' for c in columns)})
                         VALUES ({', '.join(placeholders)})
                     """
                     
+                    if unique_constraints:
+                        # Add UPSERT logic: update non-PK columns on duplicate
+                        update_cols = [c for c in columns if c not in ['id', 'created_at']]
+                        if update_cols:
+                            sql += " ON DUPLICATE KEY UPDATE "
+                            sql += ', '.join(f'`{c}` = VALUES(`{c}`)' for c in update_cols)
+                    
                     cursor.execute(sql, values)
                     
+                    # Get the inserted/updated row ID
+                    row_id = cursor.lastrowid
+                    
+                    # If lastrowid is 0, we updated an existing row - need to fetch its ID
+                    if row_id == 0 and unique_constraints:
+                        # Find the ID by querying with unique constraint values
+                        for unique_cols in unique_constraints:
+                            if all(col in insert_data for col in unique_cols):
+                                where_clause = ' AND '.join(f'`{col}` = %s' for col in unique_cols)
+                                where_values = [insert_data[col] for col in unique_cols]
+                                cursor.execute(f"SELECT id FROM `{target_table}` WHERE {where_clause}", where_values)
+                                result = cursor.fetchone()
+                                if result:
+                                    row_id = result[0]
+                                    break
+                    
                     # Cache ID mappings for FK lookups
-                    self._cache_id_mapping(old_table, target_table, row, cursor.lastrowid, insert_data)
+                    self._cache_id_mapping(old_table, target_table, row, row_id, insert_data)
                     
                     migrated_count += 1
                     
