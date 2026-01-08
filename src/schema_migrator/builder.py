@@ -231,14 +231,16 @@ def merge_mappings(old_tables, mappings, deprecated_tables):
             
             # Handle new multi-target format
             if 'targets' in col_mapping:
-                col['targets'] = col_mapping['targets']
-                # For backward compatibility, set 'target' to first target's full path
-                if col_mapping['targets']:
-                    first_target = col_mapping['targets'][0]
+                # Filter out targets marked as hidden from diagram
+                visible_targets = [t for t in col_mapping['targets'] if t.get('display_in_diagram') is not False]
+                col['targets'] = visible_targets
+                # For backward compatibility, set 'target' to first visible target's full path
+                if visible_targets:
+                    first_target = visible_targets[0]
                     col['target'] = f"{first_target.get('table', '')}.{first_target.get('column', '')}"
                 else:
                     col['target'] = None
-                col['sql'] = '; '.join(t.get('sql', '') for t in col_mapping['targets'] if t.get('sql'))
+                col['sql'] = '; '.join(t.get('sql', '') for t in visible_targets if t.get('sql'))
             # Handle old single-target format (backward compatible)
             elif 'target' in col_mapping:
                 col['target'] = col_mapping.get('target')
@@ -316,6 +318,10 @@ def generate_reverse_mappings(mappings):
             # Process each target
             for target in targets:
                 if not target:
+                    continue
+                
+                # Skip targets marked as hidden from diagram
+                if isinstance(target, dict) and target.get('display_in_diagram') is False:
                     continue
                     
                 # Parse target: could be string "table.field" or dict

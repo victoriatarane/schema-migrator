@@ -103,6 +103,11 @@ class MigrationExecutor:
             if old_table not in self.mappings or old_table.startswith('_'):
                 continue
             
+            # Skip tables marked for custom migration
+            if '_custom_migrations' in self.mappings and old_table in self.mappings['_custom_migrations']:
+                logger.info(f"⏭️  Skipping '{old_table}' (custom migration required)")
+                continue
+            
             # Determine if this table applies to this site
             filters = self._get_site_filters(old_table, site_info)
             if filters is None:
