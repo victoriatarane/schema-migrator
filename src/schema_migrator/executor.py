@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 class MigrationExecutor:
     """Execute database migrations from field_mappings.json"""
     
-    def __init__(self, mappings_file: str, source_conn, source_db: str, central_db: str = 'central_database'):
+    def __init__(self, mappings_file: str, source_conn, source_db: str, central_db: str = 'central_database',
+                 progress_callback=None):
         """
         Initialize migration executor.
         
@@ -37,24 +38,31 @@ class MigrationExecutor:
             source_conn: PyMySQL connection to source database
             source_db: Source database name
             central_db: Central database name
+            progress_callback: Optional callback(tables_done, tables_total, current_table)
+                               called after each table is migrated.
         """
         self.source_conn = source_conn
         self.source_db = source_db
         self.central_db = central_db
+        self.progress_callback = progress_callback
         
         with open(mappings_file, 'r') as f:
             self.mappings = json.load(f)
         
         # Cache for unique constraint detection: {db_name.table_name: [unique_columns]}
         self.unique_constraints_cache: Dict[str, List[List[str]]] = {}
+
+        # Cache for column-existence checks: {"db.table.col" -> bool}
+        self._column_exists_cache: Dict[str, bool] = {}
         
         # Universal ID mapping cache: { 'table_name': { 'lookup_column': { old_value: new_id } } }
-        # Example: { 'users': { 'username': { 'admin': 1, 'user2': 2 } } }
-        #          { 'patients': { 'patient_id': { 'PAT001': 1, 'PAT002': 2 } } }
         self.id_mappings = {}
         
         # Track which tables have been migrated (for dependency resolution)
         self.migrated_tables = set()
+        
+        # Row-level error tracking: [{table, row_id, error, row_snapshot}, ...]
+        self.skipped_rows: List[Dict[str, Any]] = []
     
     def migrate_site(
         self,
@@ -85,88 +93,112 @@ class MigrationExecutor:
             raise ValueError("site_info must contain 'username'")
         
         logger.info(f"Starting migration for site: {site_info.get('siteName', username)}")
-        logger.debug(f"Username: {username}, Tenant DB: {tenant_db}, Site UUID: {site_uuid}")
         
         # Step 1: Register site in central DB (needed for FK constraints)
         try:
             self._register_site_in_central(site_info, tenant_db, site_uuid)
         except Exception as e:
-            stats['errors'].append({'table': 'sites_registry', 'error': str(e)})
+            stats['errors'].append({'table': 'site_registry', 'error': str(e)})
             logger.error(f"Failed to register site: {e}")
             return stats
         
         # Step 2: Get migration order (respecting FK dependencies)
         migration_order = self._get_migration_order()
+
+        # Pre-compute the list of tables we'll actually migrate so we know the total
+        custom = set(self.mappings.get('_custom_migrations', []))
+        tables_to_migrate = [
+            t for t in migration_order
+            if t in self.mappings and not t.startswith('_') and t not in custom
+        ]
+        tables_total = len(tables_to_migrate)
+        tables_done = 0
         
+        # Disable FK checks for the duration of data migration
+        # (re-enabled in the finally block below)
+        try:
+            with self.source_conn.cursor() as cursor:
+                cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+        except Exception:
+            pass  # Best-effort; some connections may not support this
+
         # Step 3: Migrate each table
-        for old_table in migration_order:
-            if old_table not in self.mappings or old_table.startswith('_'):
-                continue
-            
-            # Skip tables marked for custom migration
-            if '_custom_migrations' in self.mappings and old_table in self.mappings['_custom_migrations']:
-                logger.info(f"⏭️  Skipping '{old_table}' (custom migration required)")
-                continue
-            
-            # Determine if this table applies to this site
-            filters = self._get_site_filters(old_table, site_info)
-            if filters is None:
-                continue  # Skip tables not applicable to this site
-            
-            print(f"\n📋 Migrating table: {old_table}")
-            
+        try:
+            for old_table in tables_to_migrate:
+                tables_done += 1
+
+                # Determine if this table applies to this site
+                filters = self._get_site_filters(old_table, site_info)
+                if filters is None:
+                    logger.debug(f"Skipping {old_table} (not applicable)")
+                    if self.progress_callback:
+                        self.progress_callback(tables_done, tables_total, old_table)
+                    continue  # Skip tables not applicable to this site
+                
+                logger.info(f"📋 Migrating table: {old_table} ({tables_done}/{tables_total})")
+                if self.progress_callback:
+                    self.progress_callback(tables_done, tables_total, old_table)
+                
+                try:
+                    # Migrate to tenant DB
+                    tenant_stats = self.migrate_table(
+                        old_table=old_table,
+                        target_db=tenant_db,
+                        target_db_type='tenant',
+                        site_uuid=site_uuid,
+                        site_info=site_info,
+                        filters=filters
+                    )
+                    if tenant_stats['migrated'] > 0:
+                        stats['tenant_tables'] += 1
+                        stats['total_rows'] += tenant_stats['migrated']
+                        logger.info(f"  ✓ Tenant: {tenant_stats['migrated']} rows")
+                    
+                    # Migrate to central DB (if table has central targets)
+                    central_stats = self.migrate_table(
+                        old_table=old_table,
+                        target_db=self.central_db,
+                        target_db_type='central',
+                        site_uuid=site_uuid,
+                        site_info=site_info,
+                        filters=filters
+                    )
+                    if central_stats['migrated'] > 0:
+                        stats['central_tables'] += 1
+                        stats['total_rows'] += central_stats['migrated']
+                        logger.info(f"  ✓ Central: {central_stats['migrated']} rows")
+                    
+                    if tenant_stats['migrated'] == 0 and central_stats['migrated'] == 0:
+                        logger.debug(f"  No data to migrate")
+                    
+                except Exception as e:
+                    import traceback
+                    error_msg = str(e)
+                    traceback_str = traceback.format_exc()
+                    stats['errors'].append({'table': old_table, 'error': error_msg})
+                    logger.error(f"  ✗ Error migrating {old_table}: {error_msg}")
+                    logger.debug(f"Traceback:\n{traceback_str[:500]}")
+        finally:
+            # Re-enable FK checks regardless of success/failure
             try:
-                # Migrate to tenant DB
-                tenant_stats = self.migrate_table(
-                    old_table=old_table,
-                    target_db=tenant_db,
-                    target_db_type='tenant',
-                    site_uuid=site_uuid,
-                    site_info=site_info,
-                    filters=filters
-                )
-                if tenant_stats['migrated'] > 0:
-                    stats['tenant_tables'] += 1
-                    stats['total_rows'] += tenant_stats['migrated']
-                    logger.info(f"Tenant: {tenant_stats['migrated']} rows")
-                
-                # Migrate to central DB (if table has central targets)
-                central_stats = self.migrate_table(
-                    old_table=old_table,
-                    target_db=self.central_db,
-                    target_db_type='central',
-                    site_uuid=site_uuid,
-                    site_info=site_info,
-                    filters=filters
-                )
-                if central_stats['migrated'] > 0:
-                    stats['central_tables'] += 1
-                    stats['total_rows'] += central_stats['migrated']
-                    logger.info(f"Central: {central_stats['migrated']} rows")
-                
-                if tenant_stats['migrated'] == 0 and central_stats['migrated'] == 0:
-                    logger.debug(f"No data to migrate")
-                
-            except Exception as e:
-                import traceback
-                error_msg = str(e)
-                traceback_str = traceback.format_exc()
-                stats['errors'].append({'table': old_table, 'error': error_msg})
-                logger.error(f"Error: {error_msg}")
-                logger.debug(f"Traceback:\n{traceback_str[:500]}")
+                with self.source_conn.cursor() as cursor:
+                    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+            except Exception:
+                pass
         
-        print(f"\n✅ Migration complete for {username}")
+        logger.info(f"✅ Migration complete for {username}")
         logger.info(f"Rows migrated: {stats['total_rows']}")
         logger.info(f"Errors: {len(stats['errors'])}")
         
+        stats['skipped_rows'] = self.skipped_rows
         return stats
     
     def _register_site_in_central(self, site_info: Dict, tenant_db: str, site_uuid: str):
-        """Register site in sites_registry (required for FK constraints)."""
+        """Register site in site_registry (required for FK constraints)."""
         with self.source_conn.cursor() as cursor:
             cursor.execute(f"USE `{self.central_db}`")
             cursor.execute("""
-                INSERT INTO sites_registry (
+                INSERT INTO site_registry (
                     site_uuid, database_name, site_name, site_email,
                     is_active, is_internal, created_by
                 ) VALUES (%s, %s, %s, %s, TRUE, FALSE, 'migration')
@@ -180,74 +212,60 @@ class MigrationExecutor:
                 site_info.get('AdminEmailAddress', '')
             ))
             self.source_conn.commit()
-            logger.info(f"Registered in sites_registry")
+            logger.info(f"Registered in site_registry")
     
     def _get_migration_order(self) -> List[str]:
         """
-        Return tables in dependency order.
-        Parents must be migrated before children to satisfy FK constraints.
+        Return source tables in the order they should be migrated.
+
+        Default: all non-internal keys from field_mappings.json (keys
+        starting with ``_`` are considered internal/meta).
+
+        Override in subclasses to enforce a specific dependency order.
         """
-        order = [
-            # Core site/user data (no dependencies)
-            'sysadmin_systemsettings',  # -> users, site
-            
-            # DICOM hierarchy (parent -> child)
-            'patients',
-            'studies',
-            'series',
-            'processing_jobs',
-            'job_reports',
-            'job_report_data',
-            'dicom_tags',
-            
-            # Central tables (global, no site dependency)
-            'services',
-            'container_description',
-            'user_licenses',
-            'rsi_config',
-            
-            # Session/auth (depends on users)
-            'session',
-            'oauth_state',
-            'output_routing',
-            
-            # Logs (depends on users)
-            'devlog',
-            'audit',
-        ]
-        
-        # Add any tables not in order at the end
-        for table in self.mappings.keys():
-            if table not in order and not table.startswith('_'):
-                order.append(table)
-        
-        return order
+        return [t for t in self.mappings.keys() if not t.startswith('_')]
     
+    def _resolve_source_table(self, mapping_key: str) -> str:
+        """Map a field_mappings key to the actual source table name.
+
+        Override when the source table has a different name than the
+        mapping key. Default: identity (key == table name).
+        """
+        return mapping_key
+
     def _get_site_filters(self, old_table: str, site_info: Dict) -> Optional[Dict[str, Any]]:
-        """Determine filter criteria for a site-specific table."""
+        """Determine filter criteria for a site-specific table.
+
+        Default implementation looks for ``username`` or ``account_id``
+        columns in the source table.  Override in subclasses for more
+        complex filter logic (e.g. service-level filtering, column
+        aliases, global-row inclusion).
+
+        Returns:
+            A filter dict (column → value/list), or ``None`` to skip.
+        """
         username = site_info.get('username')
         account_id = site_info.get('id')
-        
-        # Check which columns actually exist in the old table
-        # Use regular cursor (not DictCursor) for SHOW COLUMNS
+        source_table = self._resolve_source_table(old_table)
+
         try:
             with self.source_conn.cursor(pymysql.cursors.Cursor) as cursor:
                 cursor.execute(f"USE `{self.source_db}`")
-                cursor.execute(f"SHOW COLUMNS FROM `{old_table}`")
+                cursor.execute(f"SHOW COLUMNS FROM `{source_table}`")
                 columns = {row[0] for row in cursor.fetchall()}
         except Exception as e:
-            logger.warning(f"Could not check columns for {old_table}: {e}")
+            logger.warning(f"Could not check columns for {source_table}: {e}")
             return None
-        
-        # Determine filter based on available columns
+
         if 'username' in columns:
             return {'username': username}
         elif 'account_id' in columns:
             return {'account_id': account_id}
-        else:
-            # For DICOM tables without username, we skip them here
-            # They should be migrated by the hardcoded functions that understand the relationships
-            return None  # Indicates: skip this table in JSON-driven migration
+        elif 'id_user' in columns:
+            return {'id_user': account_id}
+
+        # No recognised filter column — skip in JSON-driven migration
+        return None
     
     def migrate_table(
         self, 
@@ -304,19 +322,68 @@ class MigrationExecutor:
         
         return stats
     
+    def _get_fetch_modifiers(self, old_table: str) -> Dict[str, Any]:
+        """Return optional ORDER BY / LIMIT hints for a source table.
+
+        Override in subclasses to cap large tables or control row ordering.
+
+        Returns:
+            Dict with optional keys:
+            - ``order_by`` (str|None): e.g. ``'id DESC'``
+            - ``limit``    (int|None): max rows to fetch
+        """
+        return {'order_by': None, 'limit': None}
+
     def _fetch_source_data(self, old_table: str, filters: Optional[Dict]) -> List[Dict]:
-        """Fetch source data with filters."""
+        """Fetch source data with filters.
+
+        Filter values can be:
+        - scalar  → ``WHERE col = %s``
+        - list    → ``WHERE col IN (%s, %s, ...)``  (``None`` in list → ``IS NULL``)
+
+        Applies ORDER BY / LIMIT from ``_get_fetch_modifiers`` when set.
+        Uses ``_resolve_source_table`` for the actual table name.
+        """
+        source_table = self._resolve_source_table(old_table)
         with self.source_conn.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute(f"USE `{self.source_db}`")
             
             where_clause = ""
-            where_params = []
+            where_params: list = []
             if filters:
-                conditions = [f"`{k}` = %s" for k in filters.keys()]
-                where_clause = " WHERE " + " AND ".join(conditions)
-                where_params = list(filters.values())
+                conditions = []
+                for k, v in filters.items():
+                    if isinstance(v, (list, tuple)):
+                        if not v:
+                            continue
+                        # Separate None (SQL NULL) from real values
+                        non_null = [x for x in v if x is not None]
+                        has_null = None in v
+                        parts = []
+                        if non_null:
+                            placeholders = ", ".join(["%s"] * len(non_null))
+                            parts.append(f"`{k}` IN ({placeholders})")
+                            where_params.extend(non_null)
+                        if has_null:
+                            parts.append(f"`{k}` IS NULL")
+                        if parts:
+                            conditions.append(f"({' OR '.join(parts)})")
+                    else:
+                        conditions.append(f"`{k}` = %s")
+                        where_params.append(v)
+                if conditions:
+                    where_clause = " WHERE " + " AND ".join(conditions)
             
-            query = f"SELECT * FROM `{old_table}`{where_clause}"
+            mods = self._get_fetch_modifiers(old_table)
+            order_by = mods.get('order_by')
+            limit = mods.get('limit')
+
+            query = f"SELECT * FROM `{source_table}`{where_clause}"
+            if order_by:
+                query += f" ORDER BY {order_by}"
+            if limit:
+                query += f" LIMIT {int(limit)}"
+
             cursor.execute(query, where_params)
             rows = cursor.fetchall()
             
@@ -380,62 +447,60 @@ class MigrationExecutor:
         
         return target_groups
     
+    # Override in subclasses to declare FK dependencies between *target*
+    # tables.  Format: {dependent_table: [tables_it_depends_on]}.
+    # The topological sort in ``_sort_targets_by_dependency`` uses this.
+    _TARGET_DEPENDENCIES: Dict[str, List[str]] = {}
+
     def _sort_targets_by_dependency(self, tables: List[str]) -> List[str]:
         """
-        Sort target tables by FK dependency order.
-        Tables without dependencies come first, tables with dependencies come later.
-        
-        This ensures that when migrating data from a single source table to multiple
-        target tables (e.g., series -> patients, studies, series, processing_jobs),
-        we create records in the correct order so FKs can be resolved.
+        Sort target tables by FK dependency order using ``_TARGET_DEPENDENCIES``.
+
+        Tables without dependencies come first, tables with dependencies
+        come later.  Override ``_TARGET_DEPENDENCIES`` in subclasses to
+        declare project-specific FK relationships between target tables.
         """
-        # Define known FK dependencies
-        # Format: {dependent_table: [tables_it_depends_on]}
-        dependencies = {
-            'processing_jobs': ['series', 'users'],
-            'series': ['studies'],
-            'studies': ['patients'],
-            'job_reports': ['processing_jobs'],
-            'job_report_data': ['job_reports'],
-            'sessions': ['users'],
-            'devlog': ['users'],
-            'audit_log': ['users'],
-            'oauth_state': ['users'],
-            'rsi_config': ['services'],  # In central DB
-            'user_licenses': ['services'],  # In central DB
-        }
-        
-        # Create a dependency graph for tables in this migration
+        dependencies = self._TARGET_DEPENDENCIES
+
         in_migration = set(tables)
         dep_graph = {}
         for table in tables:
             dep_graph[table] = [dep for dep in dependencies.get(table, []) if dep in in_migration]
-        
+
         # Topological sort
-        sorted_tables = []
-        visited = set()
-        temp_mark = set()
-        
+        sorted_tables: List[str] = []
+        visited: set = set()
+        temp_mark: set = set()
+
         def visit(table):
             if table in temp_mark:
-                # Circular dependency detected, just proceed
-                return
+                return  # circular — just proceed
             if table in visited:
                 return
-            
             temp_mark.add(table)
             for dep in dep_graph.get(table, []):
                 visit(dep)
             temp_mark.remove(table)
             visited.add(table)
             sorted_tables.append(table)
-        
+
         for table in tables:
             if table not in visited:
                 visit(table)
-        
+
         return sorted_tables
     
+    def _has_column(self, cursor, db_name: str, table_name: str, column_name: str) -> bool:
+        """Check whether *column_name* exists in *table_name* (cached)."""
+        key = f"{db_name}.{table_name}.{column_name}"
+        if key not in self._column_exists_cache:
+            try:
+                cursor.execute(f"SHOW COLUMNS FROM `{db_name}`.`{table_name}` LIKE %s", (column_name,))
+                self._column_exists_cache[key] = cursor.fetchone() is not None
+            except Exception:
+                self._column_exists_cache[key] = False
+        return self._column_exists_cache[key]
+
     def _get_unique_constraints(self, db_name: str, table_name: str) -> List[List[str]]:
         """
         Get unique constraint columns for a table.
@@ -473,6 +538,104 @@ class MigrationExecutor:
         self.unique_constraints_cache[cache_key] = unique_constraints
         return unique_constraints
     
+    # ────────────────────────────────────────────────────────────
+    # FK-source detection: tables whose auto-generated IDs are
+    # referenced by downstream lookup_chains.  These MUST be
+    # inserted row-by-row so we can capture each lastrowid.
+    # ────────────────────────────────────────────────────────────
+
+    _fk_source_cache: Optional[frozenset] = None
+
+    def _get_fk_source_tables(self) -> frozenset:
+        """Return the set of target table names that appear in any
+        ``lookup_chain[].new_table`` across all mappings.
+
+        These tables need per-row INSERT so their auto-increment IDs
+        can be cached for downstream FK resolution.  All other tables
+        can safely use batch INSERT.
+        """
+        if self._fk_source_cache is not None:
+            return self._fk_source_cache
+
+        fk_tables: set = set()
+        for old_table, field_mappings in self.mappings.items():
+            if old_table.startswith('_') or not isinstance(field_mappings, dict):
+                continue
+            for _field, mapping in field_mappings.items():
+                if not isinstance(mapping, dict):
+                    continue
+                for target in mapping.get('targets', []):
+                    for step in (target.get('lookup_chain') or []):
+                        nt = step.get('new_table')
+                        if nt:
+                            fk_tables.add(nt)
+        self._fk_source_cache = frozenset(fk_tables)
+        return self._fk_source_cache
+
+    # ────────────────────────────────────────────────────────────
+    # Prepare a single row's insert_data dict
+    # ────────────────────────────────────────────────────────────
+
+    def _prepare_insert_data(
+        self,
+        row: Dict,
+        field_list: List[Dict],
+        old_table: str,
+        target_table: str,
+        target_db: str,
+        site_info: Dict,
+        site_uuid: str,
+        cursor,
+    ) -> Optional[Dict]:
+        """Build the column→value dict for one source row.
+
+        Returns ``None`` when the row should be skipped (empty data).
+        """
+        insert_data: Dict[str, Any] = {}
+
+        for field_info in field_list:
+            old_field = field_info['old_field']
+            new_field = field_info['new_field']
+            sql_transform = field_info.get('sql')
+            condition = field_info.get('condition')
+            lookup_chain = field_info.get('lookup_chain')
+
+            if condition and not self._eval_condition(condition, row):
+                continue
+
+            value = self._get_field_value(
+                row=row,
+                old_field=old_field,
+                new_field=new_field,
+                sql_transform=sql_transform,
+                old_table=old_table,
+                target_table=target_table,
+                target_db=target_db,
+                site_info=site_info,
+                lookup_chain=lookup_chain,
+            )
+            insert_data[new_field] = value
+
+        if not insert_data:
+            return None
+
+        # Add site_uuid / site_name when the target table expects them
+        if 'site_uuid' not in insert_data:
+            if self._has_column(cursor, target_db, target_table, 'site_uuid'):
+                insert_data['site_uuid'] = site_uuid
+
+        if 'site_name' not in insert_data or insert_data.get('site_name') is None:
+            if self._has_column(cursor, target_db, target_table, 'site_name'):
+                site_name_value = site_info.get('siteName', '')
+                if site_name_value:
+                    insert_data['site_name'] = site_name_value
+
+        return insert_data
+
+    # ────────────────────────────────────────────────────────────
+    # Main entry point — chooses batch vs row-by-row
+    # ────────────────────────────────────────────────────────────
+
     def _migrate_to_target(
         self,
         old_table: str,
@@ -483,107 +646,199 @@ class MigrationExecutor:
         site_uuid: str,
         site_info: Dict
     ) -> int:
-        """Migrate rows to a specific target table."""
+        """Migrate rows to a specific target table.
+
+        Automatically uses **batch INSERT** (via ``executemany``) for
+        large tables whose IDs are not referenced by downstream FK
+        chains, and falls back to row-by-row INSERT otherwise.
+        """
         if not source_rows:
             return 0
-        
-        migrated_count = 0
-        
+
+        # Phase 1 — prepare every row's insert_data
+        prepared: List[Tuple[Dict, Dict]] = []  # (source_row, insert_data)
         with self.source_conn.cursor() as cursor:
             cursor.execute(f"USE `{target_db}`")
-            
             for row in source_rows:
-                # Build INSERT data for this row
-                insert_data = {}
-                
-                for field_info in field_list:
-                    old_field = field_info['old_field']
-                    new_field = field_info['new_field']
-                    sql_transform = field_info.get('sql')
-                    condition = field_info.get('condition')
-                    lookup_chain = field_info.get('lookup_chain')
-                    
-                    # Skip if condition not met
-                    if condition and not self._eval_condition(condition, row):
-                        continue
-                    
-                    # Get value (with transformation if specified)
-                    value = self._get_field_value(
-                        row=row,
-                        old_field=old_field,
-                        new_field=new_field,
-                        sql_transform=sql_transform,
-                        old_table=old_table,
-                        target_table=target_table,
-                        target_db=target_db,
-                        site_info=site_info,
-                        lookup_chain=lookup_chain
-                    )
-                    
-                    insert_data[new_field] = value
-                
-                # Skip if no data to insert
-                if not insert_data:
-                    continue
-                
-                # Add site_uuid for central DB tables
-                if target_db == self.central_db and 'site_uuid' not in insert_data:
-                    # Check if table has site_uuid column
-                    if target_table in ['rsi_config', 'user_licenses', 'devlog', 'total_activity_metrics']:
-                        insert_data['site_uuid'] = site_uuid
-                
-                # Build and execute INSERT (with UPSERT for deduplication)
+                data = self._prepare_insert_data(
+                    row, field_list, old_table, target_table,
+                    target_db, site_info, site_uuid, cursor,
+                )
+                if data is not None:
+                    prepared.append((row, data))
+
+        if not prepared:
+            return 0
+
+        # Phase 2 — choose strategy
+        needs_id_cache = target_table in self._get_fk_source_tables()
+
+        if needs_id_cache or len(prepared) <= 20:
+            return self._insert_rows_individually(
+                old_table, target_db, target_table, prepared,
+            )
+        else:
+            return self._insert_rows_batch(
+                old_table, target_db, target_table, prepared,
+            )
+
+    # ────────────────────────────────────────────────────────────
+    # Row-by-row INSERT  (original behaviour — needed for FK cache)
+    # ────────────────────────────────────────────────────────────
+
+    def _insert_rows_individually(
+        self,
+        old_table: str,
+        target_db: str,
+        target_table: str,
+        prepared: List[Tuple[Dict, Dict]],
+    ) -> int:
+        migrated_count = 0
+        unique_constraints = self._get_unique_constraints(target_db, target_table)
+
+        with self.source_conn.cursor() as cursor:
+            cursor.execute(f"USE `{target_db}`")
+
+            for row, insert_data in prepared:
                 try:
                     columns = list(insert_data.keys())
                     placeholders = ["%s"] * len(columns)
                     values = list(insert_data.values())
-                    
-                    # Detect unique constraints for deduplication
-                    unique_constraints = self._get_unique_constraints(target_db, target_table)
-                    
-                    # Build INSERT with ON DUPLICATE KEY UPDATE if unique constraints exist
+
                     sql = f"""
-                        INSERT INTO `{target_table}` 
+                        INSERT INTO `{target_table}`
                         ({', '.join(f'`{c}`' for c in columns)})
                         VALUES ({', '.join(placeholders)})
                     """
-                    
+
                     if unique_constraints:
-                        # Add UPSERT logic: update non-PK columns on duplicate
                         update_cols = [c for c in columns if c not in ['id', 'created_at']]
                         if update_cols:
                             sql += " ON DUPLICATE KEY UPDATE "
                             sql += ', '.join(f'`{c}` = VALUES(`{c}`)' for c in update_cols)
-                    
+
                     cursor.execute(sql, values)
-                    
-                    # Get the inserted/updated row ID
+
                     row_id = cursor.lastrowid
-                    
-                    # If lastrowid is 0, we updated an existing row - need to fetch its ID
                     if row_id == 0 and unique_constraints:
-                        # Find the ID by querying with unique constraint values
                         for unique_cols in unique_constraints:
                             if all(col in insert_data for col in unique_cols):
-                                where_clause = ' AND '.join(f'`{col}` = %s' for col in unique_cols)
-                                where_values = [insert_data[col] for col in unique_cols]
-                                cursor.execute(f"SELECT id FROM `{target_table}` WHERE {where_clause}", where_values)
+                                wc = ' AND '.join(f'`{col}` = %s' for col in unique_cols)
+                                wv = [insert_data[col] for col in unique_cols]
+                                cursor.execute(f"SELECT id FROM `{target_table}` WHERE {wc}", wv)
                                 result = cursor.fetchone()
                                 if result:
                                     row_id = result[0]
                                     break
-                    
-                    # Cache ID mappings for FK lookups
+
                     self._cache_id_mapping(old_table, target_table, row, row_id, insert_data)
-                    
                     migrated_count += 1
-                    
+
                 except Exception as e:
-                    # Don't raise - just log and continue with next row
-                    logger.warning(f"Skipped row: {str(e)[:100]}")
-            
+                    rid = row.get('id')
+                    logger.warning(f"Skipped row (id={rid}): {str(e)[:100]}")
+                    self.skipped_rows.append({
+                        'table': old_table,
+                        'target_table': target_table,
+                        'row_id': rid,
+                        'error': str(e)[:300],
+                    })
+
             self.source_conn.commit()
-        
+
+        return migrated_count
+
+    # ────────────────────────────────────────────────────────────
+    # Batch INSERT  (fast path for leaf tables with no FK lookups)
+    # ────────────────────────────────────────────────────────────
+
+    _BATCH_SIZE = 500
+
+    def _insert_rows_batch(
+        self,
+        old_table: str,
+        target_db: str,
+        target_table: str,
+        prepared: List[Tuple[Dict, Dict]],
+    ) -> int:
+        """Multi-value INSERT via ``executemany`` — dramatically reduces
+        network round-trips for large tables whose IDs are not consumed
+        by downstream FK chains."""
+        from collections import defaultdict
+
+        # Group rows by their column signature so each batch has a
+        # uniform INSERT statement.
+        groups: Dict[Tuple[str, ...], List[Tuple[Dict, Dict]]] = defaultdict(list)
+        for source_row, insert_data in prepared:
+            col_key = tuple(sorted(insert_data.keys()))
+            groups[col_key].append((source_row, insert_data))
+
+        unique_constraints = self._get_unique_constraints(target_db, target_table)
+        migrated_count = 0
+        total_rows = len(prepared)
+
+        with self.source_conn.cursor() as cursor:
+            cursor.execute(f"USE `{target_db}`")
+
+            for col_key, rows_in_group in groups.items():
+                columns = list(col_key)
+
+                sql = (
+                    f"INSERT INTO `{target_table}` "
+                    f"({', '.join(f'`{c}`' for c in columns)}) "
+                    f"VALUES ({', '.join(['%s'] * len(columns))})"
+                )
+
+                if unique_constraints:
+                    update_cols = [c for c in columns if c not in ['id', 'created_at']]
+                    if update_cols:
+                        sql += " ON DUPLICATE KEY UPDATE "
+                        sql += ', '.join(f'`{c}` = VALUES(`{c}`)' for c in update_cols)
+
+                # Build value tuples
+                value_tuples = [
+                    tuple(data[col] for col in columns)
+                    for _row, data in rows_in_group
+                ]
+
+                # Execute in chunks
+                for i in range(0, len(value_tuples), self._BATCH_SIZE):
+                    chunk = value_tuples[i : i + self._BATCH_SIZE]
+                    chunk_rows = rows_in_group[i : i + self._BATCH_SIZE]
+                    try:
+                        cursor.executemany(sql, chunk)
+                        migrated_count += len(chunk)
+                    except Exception as batch_err:
+                        # Fallback: row-by-row for this chunk so we can
+                        # identify and skip individual bad rows.
+                        logger.warning(
+                            f"Batch insert failed for {target_table} "
+                            f"(chunk {i}–{i+len(chunk)}), falling back "
+                            f"to row-by-row: {batch_err}"
+                        )
+                        for source_row, insert_data in chunk_rows:
+                            try:
+                                vals = tuple(insert_data[col] for col in columns)
+                                cursor.execute(sql, vals)
+                                migrated_count += 1
+                            except Exception as row_err:
+                                rid = source_row.get('id')
+                                logger.warning(f"Skipped row (id={rid}): {str(row_err)[:100]}")
+                                self.skipped_rows.append({
+                                    'table': old_table,
+                                    'target_table': target_table,
+                                    'row_id': rid,
+                                    'error': str(row_err)[:300],
+                                })
+
+                    # Log progress for large tables
+                    if total_rows > 100 and migrated_count > 0:
+                        logger.info(
+                            f"  … {target_table}: {migrated_count}/{total_rows} rows"
+                        )
+
+            self.source_conn.commit()
+
         return migrated_count
     
     def _get_field_value(
@@ -608,19 +863,12 @@ class MigrationExecutor:
         - SQL transformations (CASE WHEN, etc.)
         - FK chain resolution (multi-level lookups)
         """
-        # DEBUG: Log input parameters
-        if new_field == 'user_id':
-            logger.debug(f"_get_field_value called: old_field={old_field}, new_field={new_field}, lookup_chain={bool(lookup_chain)}")
-        
         # 1. Check if this field requires FK chain resolution
         if lookup_chain and isinstance(lookup_chain, list):
-            logger.debug(f"Resolving FK chain for {target_table}.{new_field}...")
             resolved_id = self._resolve_fk_chain(row, lookup_chain, target_db)
             if resolved_id is not None:
-                logger.debug(f"FK resolved: {new_field} = {resolved_id}")
                 return resolved_id
             else:
-                logger.debug(f"FK chain resolution failed for {target_table}.{new_field}")
                 # When FK resolution fails, return None (field should be nullable)
                 return None
         
@@ -630,10 +878,10 @@ class MigrationExecutor:
         # 3. Universal FK resolution: Check if we have a cached mapping
         if new_field == 'user_id':
             # Try to resolve from cached mappings
-            if 'users' in self.id_mappings and 'username' in self.id_mappings['users']:
+            if 'user' in self.id_mappings and 'username' in self.id_mappings['user']:
                 username = row.get('username', base_value)
-                if username and username in self.id_mappings['users']['username']:
-                    return self.id_mappings['users']['username'][username]
+                if username and username in self.id_mappings['user']['username']:
+                    return self.id_mappings['user']['username'][username]
             # If not cached and no lookup_chain, return None
             if not lookup_chain:
                 return None
@@ -789,6 +1037,11 @@ class MigrationExecutor:
         if 'series_instance_uid' in inserted_data and inserted_data['series_instance_uid']:
             unique_columns_to_cache.append(('series_instance_uid', inserted_data['series_instance_uid']))
         
+        # Cache any legacy_* columns (used for FK resolution across schemas)
+        for col, val in inserted_data.items():
+            if col.startswith('legacy_') and val is not None:
+                unique_columns_to_cache.append((col, val))
+        
         # Store all mappings
         for lookup_col, old_value in unique_columns_to_cache:
             if lookup_col not in self.id_mappings[target_table]:
@@ -809,7 +1062,7 @@ class MigrationExecutor:
         Example lookup_chain:
         [
             {'old_table': 'series', 'old_column': 'PatientID', 'lookup_in': 'patients'},
-            {'old_table': 'patients', 'old_column': 'username', 'new_table': 'users', 'new_column': 'username'}
+            {'old_table': 'patients', 'old_column': 'username', 'new_table': 'user', 'new_column': 'username'}
         ]
         
         This would:
@@ -839,15 +1092,11 @@ class MigrationExecutor:
             new_table = step.get('new_table')        # New schema table to look in
             new_column = step.get('new_column')      # Column to match in new table
             
-            logger.debug(f"Step {step_idx}: old_col={old_column}, lookup_in={lookup_in}, new_table={new_table}")
-            
             # Step 1: Get value from current context
             if step_idx == 0:
                 # First step: get value from source_row
                 current_value = source_row.get(old_column)
-                logger.debug(f"Got value from source row: '{current_value}'")
                 if not current_value:
-                    logger.debug(f"No value in source row for column '{old_column}'")
                     return None
             
             # Step 2: If this step requires looking up in OLD schema
@@ -911,7 +1160,8 @@ class MigrationExecutor:
     ) -> Optional[int]:
         """Look up an ID in the new schema."""
         try:
-            with self.source_conn.cursor() as cursor:
+            # Explicitly use plain Cursor (not DictCursor) so result[0] works
+            with self.source_conn.cursor(pymysql.cursors.Cursor) as cursor:
                 cursor.execute(f"USE `{target_db}`")
                 cursor.execute(
                     f"SELECT `id` FROM `{table}` WHERE `{lookup_column}` = %s LIMIT 1",
