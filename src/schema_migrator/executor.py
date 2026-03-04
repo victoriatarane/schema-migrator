@@ -200,9 +200,9 @@ class MigrationExecutor:
             cursor.execute("""
                 INSERT INTO site_registry (
                     site_uuid, database_name, site_name, site_email,
-                    is_active, is_internal, created_by
-                ) VALUES (%s, %s, %s, %s, TRUE, FALSE, 'migration')
-                ON DUPLICATE KEY UPDATE 
+                    is_active
+                ) VALUES (%s, %s, %s, %s, TRUE)
+                ON DUPLICATE KEY UPDATE
                     site_name = VALUES(site_name),
                     site_email = VALUES(site_email)
             """, (

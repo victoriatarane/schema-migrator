@@ -333,13 +333,17 @@ def generate_reverse_mappings(mappings):
                     new_field = '.'.join(parts[1:])
                     schema_type = 'tenant'  # Default
                 else:
-                    # Dict format: {'table': 'x', 'column': 'y', 'sql': '...'}
+                    # Dict format: {'table': 'x', 'column': 'y', 'db': '...', 'sql': '...'}
                     new_table = target.get('table', '')
                     new_field = target.get('column', '')
-                    schema_type = 'tenant'  # Default
+                    # Use explicit db property first, then fall back to heuristic
+                    schema_type = target.get('db', 'tenant')
+                    if schema_type not in ('tenant', 'central'):
+                        schema_type = 'tenant'
                 
-                # Determine schema type from table name (pattern-based)
-                if (new_table.startswith('central_') or 
+                # Fallback heuristic for string targets without explicit db
+                if schema_type == 'tenant' and (
+                    new_table.startswith('central_') or 
                     new_table.endswith('_registry') or 
                     new_table.endswith('_cache') or
                     'global_' in new_table or
@@ -367,10 +371,28 @@ def generate_reverse_mappings(mappings):
                     'note': mapping.get('note')
                 })
     
+    # Also process _new_table_sources if present (explicit source declarations)
+    # This section maps new tables → old source tables for both tenant and central
+    table_sources = mappings.get('_new_table_sources', {})
+    for schema_type_key in ('tenant', 'central'):
+        source_map = table_sources.get(schema_type_key, {})
+        for new_table, old_tables_list in source_map.items():
+            if not isinstance(old_tables_list, list):
+                continue
+            if new_table not in reverse_map[schema_type_key]:
+                reverse_map[schema_type_key][new_table] = {
+                    'sources': set(),
+                    'fields': {}
+                }
+            for old_table in old_tables_list:
+                if isinstance(old_table, str) and not old_table.startswith('NEW_TABLE') and not old_table.startswith('NOT_MIGRATED') and not old_table.startswith('FUTURE'):
+                    reverse_map[schema_type_key][new_table]['sources'].add(old_table)
+
     # Convert sets to sorted lists
     for schema_type in reverse_map:
         for table in reverse_map[schema_type]:
-            reverse_map[schema_type][table]['sources'] = sorted(list(reverse_map[schema_type][table]['sources']))
+            if isinstance(reverse_map[schema_type][table]['sources'], set):
+                reverse_map[schema_type][table]['sources'] = sorted(list(reverse_map[schema_type][table]['sources']))
     
     return reverse_map
 
@@ -1855,7 +1877,8 @@ def build_diagram(old_schema=None, tenant_schema=None, central_schema=None,
     old_tables = merge_mappings(old_tables, field_mappings, deprecated_tables)
     
     # Generate reverse mappings for bidirectional navigation
-    reverse_mappings = generate_reverse_mappings(field_mappings)
+    # Pass full mappings_data (not filtered) so _new_table_sources is available
+    reverse_mappings = generate_reverse_mappings(mappings_data)
     
     # Count mappings
     mapped = sum(1 for t in old_tables.values() for c in t['columns'] if c.get('target'))
