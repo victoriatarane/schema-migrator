@@ -6,6 +6,7 @@ import sys
 import os
 from pathlib import Path
 from .builder import build_diagram
+from . import __version__
 
 
 def main():
@@ -56,7 +57,7 @@ For more information, visit: https://github.com/YOUR_USERNAME/schema-migrator
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 1.0.0"
+        version=f"%(prog)s {__version__}"
     )
     
     args = parser.parse_args()

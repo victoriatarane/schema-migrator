@@ -12,6 +12,7 @@ Usage:
 import re
 import json
 import os
+import copy
 
 def parse_sql_schema(sql_content, schema_name):
     """Parse CREATE TABLE statements from SQL."""
@@ -397,6 +398,122 @@ def generate_reverse_mappings(mappings):
     return reverse_map
 
 
+def load_logical_foreign_keys(mappings_path):
+    """Load cross-database logical FK metadata (sibling of field_mappings.json)."""
+    logical_path = os.path.join(os.path.dirname(mappings_path), 'logical_foreign_keys.json')
+    if os.path.exists(logical_path):
+        with open(logical_path) as f:
+            return json.load(f)
+    return {}
+
+
+def apply_logical_foreign_keys(new_tables, new_fk, central_tables, logical_config):
+    """
+    Replace tenant tables that live in ctx_central with proxy nodes and wire logical FKs.
+    MySQL cannot enforce FK constraints across central and tenant databases.
+    """
+    if not logical_config:
+        return new_tables, new_fk
+
+    moved = logical_config.get('tables_moved_to_central', {})
+    if 'user' not in moved:
+        return new_tables, new_fk
+
+    user_meta = moved['user']
+    target_table = user_meta.get('target_table', 'user')
+    proxy_key = f'@central.{target_table}'
+
+    if 'user' in new_tables:
+        del new_tables['user']
+    new_fk = [
+        r for r in new_fk
+        if r.get('from_table') != 'user' and r.get('to_table') != 'user'
+    ]
+
+    if target_table in central_tables:
+        proxy = copy.deepcopy(central_tables[target_table])
+    else:
+        proxy = {
+            'columns': [
+                {
+                    'name': 'id', 'type': 'int', 'pk': True, 'uk': False,
+                    'fk': False, 'fk_ref': None, 'auto': True,
+                }
+            ],
+            'category': 'central',
+        }
+
+    proxy['category'] = 'central'
+    proxy['schema'] = 'new'
+    proxy['external_db'] = user_meta.get('target_db', 'central')
+    proxy['external_table'] = target_table
+    proxy['is_proxy'] = True
+    proxy['proxy_label'] = user_meta.get('label', f'{target_table} (ctx_central)')
+    proxy['status'] = user_meta.get('status')
+    proxy['note'] = user_meta.get('note')
+    new_tables[proxy_key] = proxy
+
+    logical_pairs = set()
+    for col_entry in logical_config.get('tenant_to_central', []):
+        ft, fc = col_entry['from_table'], col_entry['from_col']
+        to_table = col_entry.get('to_table', target_table)
+        to_col = col_entry['to_col']
+        logical_pairs.add((ft, fc))
+
+        if ft not in new_tables:
+            continue
+        for col in new_tables[ft]['columns']:
+            if col['name'] == fc:
+                col['fk'] = True
+                col['logical_fk'] = True
+                col['fk_ref'] = [proxy_key, to_col]
+                col['external_ref'] = {
+                    'db': col_entry.get('to_db', 'central'),
+                    'table': to_table,
+                    'col': to_col,
+                }
+
+        new_fk.append({
+            'from_table': ft,
+            'from_col': fc,
+            'to_table': proxy_key,
+            'to_col': to_col,
+            'logical': True,
+            'target_db': col_entry.get('to_db', 'central'),
+            'target_table': to_table,
+        })
+
+    for ft, table_data in new_tables.items():
+        if ft == proxy_key:
+            continue
+        for col in table_data.get('columns', []):
+            ref = col.get('fk_ref')
+            if not ref or ref[0] != 'user':
+                continue
+            pair = (ft, col['name'])
+            if pair in logical_pairs:
+                continue
+            col['fk_ref'] = [proxy_key, ref[1]]
+            col['logical_fk'] = True
+            col['external_ref'] = {
+                'db': user_meta.get('target_db', 'central'),
+                'table': target_table,
+                'col': ref[1],
+            }
+            col['fk'] = True
+            new_fk.append({
+                'from_table': ft,
+                'from_col': col['name'],
+                'to_table': proxy_key,
+                'to_col': ref[1],
+                'logical': True,
+                'target_db': user_meta.get('target_db', 'central'),
+                'target_table': target_table,
+            })
+
+    return new_tables, new_fk
+
+
 def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_fk_relations, central_fk_relations, reverse_mappings=None, github_repo=None):
     """Generate the complete HTML file with bidirectional relationship support."""
     
@@ -531,6 +648,20 @@ def generate_html(old_tables, new_tables, central_tables, old_fk_relations, new_
         .c-lookup { fill: #d29922; } .stroke-lookup { stroke: #d29922; }
         .c-legacy { fill: #6e7681; } .stroke-legacy { stroke: #6e7681; }
         .c-central { fill: #f0883e; } .stroke-central { stroke: #f0883e; }
+        
+        .node.external-proxy .node-bg {
+            fill: rgba(240, 136, 62, 0.1);
+            stroke-dasharray: 5 3;
+            opacity: 0.9;
+        }
+        .node.external-proxy { cursor: pointer; }
+        .node.external-proxy:hover .node-bg { fill: rgba(240, 136, 62, 0.2); opacity: 1; }
+        .node.external-proxy .node-text { fill: #f0883e; font-style: italic; }
+        .fk-line.logical {
+            stroke: #f0883e !important;
+            stroke-dasharray: 6 4;
+            stroke-opacity: 0.75 !important;
+        }
         
         .fk-line { pointer-events: none; transition: stroke-opacity 0.2s, stroke-width 0.2s; }
         
@@ -890,6 +1021,9 @@ function renderGraph() {
         <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
             <polygon points="0 0, 8 3, 0 6" fill="#a371f7"/>
         </marker>
+        <marker id="arrowhead-logical" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="#f0883e"/>
+        </marker>
         <marker id="one-mark" markerWidth="10" markerHeight="10" refX="5" refY="5">
             <line x1="5" y1="2" x2="5" y2="8" stroke="#a371f7" stroke-width="2"/>
         </marker>
@@ -1048,8 +1182,12 @@ function renderGraph() {
             onmouseleave="hideFKTooltip()"/>`;
         
         // Add visible relationship arrow on top
-        svg += `<path d="${path}" fill="none" stroke="#a371f7" stroke-width="1.5" 
-            stroke-opacity="0.6" marker-end="url(#arrowhead)" class="fk-line"
+        const isLogicalFk = rel.logical === true;
+        const fkStroke = isLogicalFk ? '#f0883e' : '#a371f7';
+        const fkMarker = isLogicalFk ? 'url(#arrowhead-logical)' : 'url(#arrowhead)';
+        const fkClass = isLogicalFk ? 'fk-line logical' : 'fk-line';
+        svg += `<path d="${path}" fill="none" stroke="${fkStroke}" stroke-width="1.5" 
+            stroke-opacity="0.6" marker-end="${fkMarker}" class="${fkClass}"
             style="pointer-events:none;"/>`;
         
         // Add cardinality labels with better positioning based on arrow direction
@@ -1130,16 +1268,25 @@ function renderGraph() {
             }
         }
         
-        svg += `<g class="node ${isSelected ? 'selected' : ''}" 
+        const displayName = table.proxy_label || name;
+        const safeName = name.replace(/'/g, "\\\\'");
+        const nodeExtraClass = table.is_proxy ? ' external-proxy' : '';
+        const clickAction = table.is_proxy
+            ? `openProxyTable('${safeName}')`
+            : `selectTable('${safeName}')`;
+        const dragAttrs = table.is_proxy
+            ? 'style="cursor: pointer;"'
+            : `onmousedown="startDrag(event, '${safeName}')" style="cursor: move;"`;
+        
+        svg += `<g class="node ${isSelected ? 'selected' : ''}${nodeExtraClass}" 
             data-table="${name}" 
-            onclick="selectTable('${name}')"
-            onmousedown="startDrag(event, '${name}')"
-            style="cursor: move;"
+            onclick="${clickAction}"
+            ${dragAttrs}
             transform="translate(${pos.x},${pos.y})">
             <rect class="node-bg stroke-${cat}" width="${pos.w}" height="45"/>
             <rect class="node-stripe c-${cat}" x="0" y="0" width="3" height="45"/>
-            <text class="node-text" x="8" y="16">${name.length > pos.w/6.5 ? name.slice(0,Math.floor(pos.w/6.5)-1)+'…' : name}</text>
-            <text class="node-count" x="8" y="32">${colCount} cols${hasFk ? ' • FK' : ''}</text>
+            <text class="node-text" x="8" y="16">${displayName.length > pos.w/6.5 ? displayName.slice(0,Math.floor(pos.w/6.5)-1)+'…' : displayName}</text>
+            <text class="node-count" x="8" y="32">${colCount} cols${hasFk ? ' • FK' : ''}${table.is_proxy ? ' • central' : ''}</text>
             ${migrationBadge}
         </g>`;
     });
@@ -1251,11 +1398,20 @@ function selectTable(name) {
     showPanel(name);
 }
 
+function openProxyTable(name) {
+    const table = getSchema()[name];
+    if (!table || !table.is_proxy) {
+        selectTable(name);
+        return;
+    }
+    navigateTo('central', table.external_table, null);
+}
+
 function showPanel(name) {
     document.getElementById('detailPanel').classList.remove('collapsed');
-    document.getElementById('detailTitle').textContent = name;
-    
     const currentTable = getSchema()[name];
+    document.getElementById('detailTitle').textContent = currentTable?.proxy_label || name;
+    
     if (currentTable) {
         document.getElementById('detailBadge').style.background = `var(--${categories[currentTable.category]?.color || 'dim'})`;
         document.getElementById('detailBadge').textContent = categories[currentTable.category]?.name || currentTable.category;
@@ -1290,7 +1446,11 @@ function showPanel(name) {
     };
     const labels = schemaLabels[currentView] || schemaLabels['old'];
     
-    let html = sourceHtml + '<div style="margin-bottom:10px;font-size:11px;color:var(--dim)">Click any column for detailed migration info. <span class="hide-on-small">Showing migration relationships. <strong style="color:var(--purple)">💡 Tip:</strong> Click PK/FK badges to highlight arrows!</span></div>';
+    let html = sourceHtml;
+    if (currentTable?.is_proxy) {
+        html += `<p style="margin:0 0 12px;padding:10px;background:rgba(240,136,62,0.12);border:1px solid #f0883e;border-radius:6px;font-size:11px;color:#f0883e;">Logical reference in ctx_central. <button type="button" style="margin-left:6px;padding:2px 8px;background:var(--bg);border:1px solid #f0883e;border-radius:4px;font-size:10px;color:#f0883e;cursor:pointer;" onclick="navigateTo('central','${currentTable.external_table}',null)">Open in Central tab</button></p>`;
+    }
+    html += '<div style="margin-bottom:10px;font-size:11px;color:var(--dim)">Click any column for detailed migration info. Orange dashed arrows = logical cross-DB FK.</div>';
     html += `<table class="comparison-table ${labels.showCol3 ? '' : 'two-column'}"><thead><tr>`;
     html += `<th class="schema-col old-schema">${labels.col1}</th>`;
     html += `<th class="schema-col new-schema">${labels.col2}</th>`;
@@ -1318,7 +1478,7 @@ function showPanel(name) {
             html += `<span class="col-type">${col.type}</span>`;
             html += '<div class="col-badges">';
             if (col.pk) html += `<span class="badge pk" onclick="event.stopPropagation(); highlightPKRelations('${name}','${col.name}')" title="Click to highlight FK arrows referencing this">PK</span>`;
-            if (col.fk) html += `<span class="badge fk" onclick="event.stopPropagation(); highlightFKRelation('${name}','${col.name}')" title="Click to highlight FK arrow">FK</span>`;
+            if (col.fk) html += `<span class="badge fk" onclick="event.stopPropagation(); highlightFKRelation('${name}','${col.name}')" title="Click to highlight FK arrow">${col.logical_fk ? 'LF' : 'FK'}</span>`;
             if (col.uk) html += '<span class="badge uk">UK</span>';
             if (currentView === 'old') {
                 if (isDeprecated) html += '<span style="color:var(--red);margin-left:5px">❌</span>';
@@ -1862,6 +2022,14 @@ def build_diagram(old_schema=None, tenant_schema=None, central_schema=None,
     old_tables, old_fk = parse_sql_schema(old_sql, 'old')
     new_tables, new_fk = parse_sql_schema(new_sql, 'new')
     central_tables, central_fk = parse_sql_schema(central_sql, 'central')
+
+    logical_config = load_logical_foreign_keys(mappings)
+    if logical_config:
+        new_tables, new_fk = apply_logical_foreign_keys(
+            new_tables, new_fk, central_tables, logical_config
+        )
+        n_logical = len(logical_config.get('tenant_to_central', []))
+        print(f"  Logical cross-DB FKs: {n_logical} (tenant user hidden as @central.user proxy)")
     
     print(f"  Old schema: {len(old_tables)} tables, {sum(len(t['columns']) for t in old_tables.values())} columns, {len(old_fk)} FK relations")
     print(f"  New tenant: {len(new_tables)} tables, {sum(len(t['columns']) for t in new_tables.values())} columns, {len(new_fk)} FK relations")

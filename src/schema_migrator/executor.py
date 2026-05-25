@@ -20,6 +20,7 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import pymysql
+from pymysql.err import OperationalError
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -192,27 +193,87 @@ class MigrationExecutor:
         
         stats['skipped_rows'] = self.skipped_rows
         return stats
+
+    def _ensure_site_registry_subdomain_column(self, cursor) -> None:
+        try:
+            cursor.execute(
+                "ALTER TABLE site_registry ADD COLUMN subdomain VARCHAR(64) NULL "
+                "COMMENT 'Routing alias for tenant frontend'"
+            )
+        except OperationalError as e:
+            if e.args[0] != 1060:
+                raise
+
+    @staticmethod
+    def _derive_site_registry_subdomain(site_info: Dict, tenant_db: str) -> Optional[str]:
+        raw = (site_info.get('username') or site_info.get('siteName') or '').strip()
+        if not raw and tenant_db.startswith('ctx_'):
+            raw = tenant_db[4:]
+        if not raw:
+            return None
+        s = raw.lower().replace('_', '-')
+        s = re.sub(r'[^a-z0-9-]+', '-', s)
+        s = re.sub(r'-{2,}', '-', s).strip('-')
+        if not s or len(s) > 63:
+            return None
+        if not re.match(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$', s):
+            return None
+        return s
+
+    def _allocate_unique_site_registry_subdomain(
+        self, cursor, base: Optional[str], tenant_db: str, site_uuid: str
+    ) -> Optional[str]:
+        if not base:
+            return None
+        candidate = base
+        short_uuid = site_uuid.replace('-', '')[:8]
+        for _ in range(6):
+            cursor.execute(
+                """
+                SELECT database_name FROM site_registry
+                WHERE subdomain = %s AND database_name <> %s
+                LIMIT 1
+                """,
+                (candidate, tenant_db),
+            )
+            if not cursor.fetchone():
+                return candidate
+            stem_max = max(1, 63 - 1 - len(short_uuid))
+            stem = base[:stem_max].rstrip('-')
+            candidate = f'{stem}-{short_uuid}'[:63]
+        logger.warning('Could not allocate unique site_registry.subdomain for %s', tenant_db)
+        return None
     
     def _register_site_in_central(self, site_info: Dict, tenant_db: str, site_uuid: str):
         """Register site in site_registry (required for FK constraints)."""
         with self.source_conn.cursor() as cursor:
             cursor.execute(f"USE `{self.central_db}`")
+            self._ensure_site_registry_subdomain_column(cursor)
+            site_name = site_info.get('siteName', site_info.get('username'))
+            site_email = site_info.get('AdminEmailAddress', '')
+            derived = self._derive_site_registry_subdomain(site_info, tenant_db)
+            subdomain = self._allocate_unique_site_registry_subdomain(
+                cursor, derived, tenant_db, site_uuid
+            )
             cursor.execute("""
                 INSERT INTO site_registry (
                     site_uuid, database_name, site_name, site_email,
+                    subdomain,
                     is_active
-                ) VALUES (%s, %s, %s, %s, TRUE)
+                ) VALUES (%s, %s, %s, %s, %s, TRUE)
                 ON DUPLICATE KEY UPDATE
                     site_name = VALUES(site_name),
-                    site_email = VALUES(site_email)
+                    site_email = VALUES(site_email),
+                    subdomain = COALESCE(VALUES(subdomain), site_registry.subdomain)
             """, (
                 site_uuid,
                 tenant_db,
-                site_info.get('siteName', site_info.get('username')),
-                site_info.get('AdminEmailAddress', '')
+                site_name,
+                site_email,
+                subdomain,
             ))
             self.source_conn.commit()
-            logger.info(f"Registered in site_registry")
+            logger.info("Registered in site_registry (subdomain=%s)", subdomain)
     
     def _get_migration_order(self) -> List[str]:
         """
