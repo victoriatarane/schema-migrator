@@ -985,7 +985,9 @@ class MigrationExecutor:
                 col_name = match.group(1)
                 return row.get(col_name)
         
-        # Handle direct column references
+        # Handle direct column references and quoted literals
+        if (sql.startswith("'") and sql.endswith("'")) or (sql.startswith('"') and sql.endswith('"')):
+            return sql[1:-1]
         return row.get(sql)
     
     def _eval_case_statement(self, sql: str, row: Dict) -> Any:
