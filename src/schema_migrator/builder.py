@@ -1680,34 +1680,45 @@ function selectColumn(tableName, colName) {
             </div>`;
         }
     } else {
-        // New/Central schema: show where it comes FROM
-        if (col.source) {
+        // New/Central schema: show where it comes FROM (prefer reverse mappings)
+        const schemaType = currentView === 'new' ? 'tenant' : 'central';
+        const fieldSources = reverseMappings?.[schemaType]?.[tableName]?.fields?.[colName];
+        if (fieldSources && fieldSources.length > 0) {
+            html += '<div class="lineage-arrow" style="color:var(--orange)">↑ source from</div>';
+            fieldSources.forEach((src, idx) => {
+                const srcTable = src.old_table;
+                const srcCol = src.old_field;
+                html += `<div class="lineage-box source clickable" onclick="navigateTo('old','${srcTable}','${srcCol || ''}')">
+                    <div class="lineage-label">${fieldSources.length > 1 ? (idx + 1) + '. ' : ''}Source (Old Schema) <span style="font-size:8px;color:var(--blue)">→ click to view</span></div>
+                    <div class="lineage-value">${srcTable}.${srcCol || colName}</div>
+                </div>`;
+            });
+        } else if (col.source) {
             let srcTable, srcCol, srcView = 'old';
             const src = col.source.trim();
             
             if (src.startsWith('tenant.')) {
-                // Central schema referencing tenant schema: "tenant.users.field"
                 const parts = src.replace('tenant.', '').split('.');
                 srcTable = parts[0];
                 srcCol = parts.length > 1 ? parts[1] : null;
                 srcView = 'new';
             } else if (src.includes('.')) {
-                // Explicit table.column format
                 const parts = src.split('.');
                 srcTable = parts[0];
                 srcCol = parts.length > 1 ? parts[1] : null;
             } else {
-                // Just column name - source table not specified
-                srcTable = 'unknown';
-                srcCol = src;
+                html += `<div style="font-size:10px;color:var(--dim);margin-top:8px;font-style:italic">Source field only (${src}) — open Old Schema tab and search tables</div>`;
+                srcTable = null;
             }
             
-            const srcLabel = srcView === 'new' ? 'Tenant DB' : 'Old Schema';
-            html += '<div class="lineage-arrow" style="color:var(--orange)">↑ source from</div>';
-            html += `<div class="lineage-box source clickable" onclick="navigateTo('${srcView}','${srcTable}','${srcCol || ''}')">
-                <div class="lineage-label">Source (${srcLabel}) <span style="font-size:8px;color:var(--blue)">→ click to view</span></div>
-                <div class="lineage-value">${srcTable}.${srcCol || src}</div>
-            </div>`;
+            if (srcTable) {
+                const srcLabel = srcView === 'new' ? 'Tenant DB' : 'Old Schema';
+                html += '<div class="lineage-arrow" style="color:var(--orange)">↑ source from</div>';
+                html += `<div class="lineage-box source clickable" onclick="navigateTo('${srcView}','${srcTable}','${srcCol || ''}')">
+                    <div class="lineage-label">Source (${srcLabel}) <span style="font-size:8px;color:var(--blue)">→ click to view</span></div>
+                    <div class="lineage-value">${srcTable}.${srcCol || src}</div>
+                </div>`;
+            }
         } else {
             html += `<div style="font-size:10px;color:var(--dim);margin-top:8px;font-style:italic">New field - no source mapping</div>`;
         }
@@ -1717,13 +1728,27 @@ function selectColumn(tableName, colName) {
 }
 
 function navigateTo(view, tableName, colName) {
-    // Check if table exists in target view
-    const targetSchema = schemaData[view] || {};
-    if (!targetSchema[tableName]) {
-        console.warn(`Table "${tableName}" not found in ${view} schema`);
-        alert(`Table "${tableName}" not found in ${view} schema`);
+    if (!tableName || tableName === 'unknown') {
+        console.warn('navigateTo: missing or unknown table name');
         return;
     }
+    // Check if table exists in target view; fall back across views for renamed tables
+    let targetView = view;
+    let targetSchema = schemaData[targetView] || {};
+    if (!targetSchema[tableName]) {
+        for (const candidate of ['old', 'new', 'central']) {
+            if ((schemaData[candidate] || {})[tableName]) {
+                targetView = candidate;
+                targetSchema = schemaData[candidate];
+                break;
+            }
+        }
+    }
+    if (!targetSchema[tableName]) {
+        console.warn(`Table "${tableName}" not found in any schema view`);
+        return;
+    }
+    view = targetView;
     
     // Switch tab
     currentView = view;
